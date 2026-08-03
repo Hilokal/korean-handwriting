@@ -1,0 +1,13 @@
+# Local installs must not leak into the image: npm ci runs inside the build
+# (mac-native better-sqlite3 binaries would break the Linux image).
+node_modules
+client/dist
+
+# Local dev database and logs — never ship data into an image.
+data
+*.db
+*.db-shm
+*.db-wal
+
+.git
+.env

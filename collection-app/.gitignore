@@ -1,0 +1,12 @@
+# Root .gitignore excludes package-lock.json (repo uses yarn), but this app
+# uses npm and its Dockerfile runs `npm ci`, which needs the lockfile.
+!package-lock.json
+
+node_modules/
+client/dist/
+data/
+seed/
+*.db
+*.db-shm
+*.db-wal
+.env

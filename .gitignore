@@ -1,0 +1,37 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Model checkpoints — large binaries; the one bundled demo model is force-added.
+*.pt
+!handwriting-generation/best_model.emb8.pt
+checkpoint.pt
+
+# Data — recordings and the production export are not committed (see download_export.sh).
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Training / run artifacts
+*.log
+generated.json
+*.svg
+
+# Node
+node_modules/
+dist/
+build/
+
+# Secrets / env
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+.vscode/
+
+# Local Claude Code settings
+.claude/settings.local.json
