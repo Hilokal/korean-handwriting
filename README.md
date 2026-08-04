@@ -13,7 +13,8 @@ on a single writer's hand, it learns to produce that writer's Hangul.
 | Directory | What it is |
 |-----------|------------|
 | [`handwriting-generation/`](handwriting-generation/) | The PyTorch model, training pipeline, and inference. A bundled trained model (`best_model.emb8.pt`) is included so you can generate right away. |
-| [`collection-app/`](collection-app/) | A small web app (React + Node + SQLite) for collecting handwriting from a Neo smartpen — workers are assigned sentences and their strokes are recorded and exported for training. |
+| [`collection-app/`](collection-app/) | A small web app (React + Node + SQLite) for collecting handwriting from a Neo smartpen — workers are assigned sentences and their strokes are recorded and exported for training. Also stores feedback submitted from the demo site, with an admin page that can promote failed sentences into the writers' assignment pool. |
+| [`demo-app/`](demo-app/) | The public demo at **[hangul.ink](https://hangul.ink)** — the model exported to ONNX runs entirely in the browser, streaming strokes into a live pen animation. Deployed on Cloudflare (static assets only). |
 
 Design notes and the full progression of experiments live in
 [`handwriting-generation/CLAUDE.md`](handwriting-generation/CLAUDE.md).

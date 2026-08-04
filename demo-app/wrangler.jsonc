@@ -1,0 +1,12 @@
+// Cloudflare Workers static-assets deployment for hangul.ink.
+// First time: `npx wrangler login`, then `npm run deploy`.
+// Custom domains (hangul.ink, hangeul.ink redirect) are attached in the
+// Cloudflare dashboard — see README.md.
+{
+  "name": "hangul-ink",
+  "compatibility_date": "2026-08-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}

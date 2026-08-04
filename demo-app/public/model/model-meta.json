@@ -1,0 +1,11 @@
+{
+  "version": "8867d2d61ed6",
+  "checkpoint": "best_model.emb8.pt",
+  "hiddenSize": 128,
+  "numLayers": 3,
+  "embeddingSize": 8,
+  "numMixtures": 20,
+  "windowDim": 24,
+  "slidingWindowK": 10,
+  "absPosDim": 2
+}

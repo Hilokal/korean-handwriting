@@ -35,3 +35,8 @@ build/
 
 # Local Claude Code settings
 .claude/settings.local.json
+
+# demo-app generated artifacts (public/model IS committed; ort wasm is copied
+# from node_modules at build time)
+demo-app/public/ort/
+demo-app/scripts/smoke-output.svg

@@ -1,0 +1,29 @@
+{
+  "name": "hangul-ink-demo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test:smoke": "tsx scripts/smoke.ts",
+    "test:browser": "tsx scripts/browser-test.ts",
+    "deploy": "npm run build && npx wrangler deploy"
+  },
+  "dependencies": {
+    "onnxruntime-web": "^1.20.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.20",
+    "@types/react-dom": "^18.3.6",
+    "@vitejs/plugin-react": "^4.4.1",
+    "onnxruntime-node": "^1.27.0",
+    "puppeteer-core": "^25.4.0",
+    "tsx": "^4.23.5",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}
