@@ -16,6 +16,13 @@ export default defineConfig({
       globals: { Buffer: true, process: true },
     }),
   ],
+  // The dependency optimizer runs only in development and needs its own
+  // loader for the SDK's Ncode project files.
+  optimizeDeps: {
+    esbuildOptions: {
+      loader: { ".nproj": "dataurl" },
+    },
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,

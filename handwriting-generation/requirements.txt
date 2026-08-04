@@ -1,3 +1,4 @@
 torch
+numpy
 flask
 flask-cors
