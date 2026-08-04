@@ -248,7 +248,8 @@ export function RecordPage() {
     return <div className="page-center">{error ?? s.loading}</div>;
   }
 
-  const svg = phase === "review" ? recordedDotsToSvgPath(dotsRef.current) : null;
+  const svg =
+    phase === "review" ? recordedDotsToSvgPath(dotsRef.current, 1 / 200) : null;
 
   return (
     <div className="record-page">
@@ -349,7 +350,7 @@ export function RecordPage() {
               viewBox={svg.viewBox}
               preserveAspectRatio="xMidYMid meet"
             >
-              <path d={svg.pathData} fill="none" stroke="#222" strokeWidth={svg.height / 120} strokeLinecap="round" strokeLinejoin="round" />
+              <path d={svg.pathData} fill="#222" stroke="none" />
             </svg>
           </div>
           <div className="actions">

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Point } from "./strokeSvg";
+import { normalizedPressure, Point } from "./strokeSvg";
 
 // Auto-fit: Ncode coordinates are absolute paper positions, so we don't know
 // where on the page the worker writes. Fit the cleaned points' bounding box
@@ -10,7 +10,7 @@ import { Point } from "./strokeSvg";
 
 const PAD = 16;
 const MAX_SCALE = 80; // px per Ncode unit; prevents absurd zoom on the first dot
-const LINE_WIDTH = 2;
+const LINE_WIDTH = 2; // nominal; actual width is modulated by pen pressure
 
 export function LiveInkCanvas({ points }: { points: Point[] }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -53,19 +53,36 @@ export function LiveInkCanvas({ points }: { points: Point[] }) {
     const ox = PAD + (cssWidth - 2 * PAD - width * scale) / 2 - minX * scale;
     const oy = PAD + (cssHeight - 2 * PAD - height * scale) / 2 - minY * scale;
 
-    ctx.lineWidth = LINE_WIDTH;
+    // Pressure → line width. Each segment gets its own stroke() because
+    // lineWidth can't vary within a path; round caps hide the joins.
+    const fnorm = normalizedPressure(points);
+    const widthAt = (i: number) => LINE_WIDTH * (0.6 + 2.0 * fnorm[i]);
+
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.strokeStyle = "#222";
-    ctx.beginPath();
+    ctx.fillStyle = "#222";
     for (let i = 0; i < points.length; i++) {
       const p = points[i];
       const x = p.x * scale + ox;
       const y = p.y * scale + oy;
-      if (i === 0 || p.startNew) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
+      const isStart = i === 0 || p.startNew;
+      const isolated =
+        isStart && (i + 1 >= points.length || points[i + 1].startNew);
+      if (isolated) {
+        ctx.beginPath();
+        ctx.arc(x, y, widthAt(i) / 2, 0, 2 * Math.PI);
+        ctx.fill();
+        continue;
+      }
+      if (isStart) continue;
+      const q = points[i - 1];
+      ctx.lineWidth = (widthAt(i - 1) + widthAt(i)) / 2;
+      ctx.beginPath();
+      ctx.moveTo(q.x * scale + ox, q.y * scale + oy);
+      ctx.lineTo(x, y);
+      ctx.stroke();
     }
-    ctx.stroke();
   }, [points]);
 
   return <canvas ref={canvasRef} className="live-canvas" />;

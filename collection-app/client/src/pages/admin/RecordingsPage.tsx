@@ -25,17 +25,10 @@ function Thumbnail({ recordingId }: { recordingId: number }) {
 
   if (dots === null) return <div className="thumb thumb-loading" />;
   if (dots.length === 0) return <div className="thumb">no ink</div>;
-  const svg = recordedDotsToSvgPath(dots);
+  const svg = recordedDotsToSvgPath(dots, 1 / 100);
   return (
     <svg className="thumb" viewBox={svg.viewBox} preserveAspectRatio="xMidYMid meet">
-      <path
-        d={svg.pathData}
-        fill="none"
-        stroke="#222"
-        strokeWidth={svg.height / 60}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
+      <path d={svg.pathData} fill="#222" stroke="none" />
     </svg>
   );
 }
