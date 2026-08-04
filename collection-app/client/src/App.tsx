@@ -10,6 +10,7 @@ import { UsersPage } from "./pages/admin/UsersPage";
 import { ProgressPage } from "./pages/admin/ProgressPage";
 import { RecordingsPage } from "./pages/admin/RecordingsPage";
 import { ReportsPage } from "./pages/admin/ReportsPage";
+import { FeedbackPage } from "./pages/admin/FeedbackPage";
 
 export default function App() {
   const [user, setUser] = useState<PublicUser | null>(null);
@@ -75,6 +76,7 @@ export default function App() {
           <Route path="progress" element={<ProgressPage />} />
           <Route path="recordings" element={<RecordingsPage />} />
           <Route path="reports" element={<ReportsPage />} />
+          <Route path="feedback" element={<FeedbackPage />} />
         </Route>
         <Route path="*" element={<Navigate to={user ? "/record" : "/login"} />} />
       </Routes>

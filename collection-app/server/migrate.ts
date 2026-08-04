@@ -95,6 +95,28 @@ const migrations: string[] = [
   `
   ALTER TABLE users RENAME COLUMN email TO username;
   `,
+  // 4: feedback submitted from the public demo site (hangul.ink). dots_json is
+  // the model's delta-encoded output; (text, params, seed, model_version)
+  // reproduces it exactly. Promoting a sentence copies it into the assignment
+  // pool so workers record the text the model failed on.
+  `
+  CREATE TABLE demo_feedback (
+    id INTEGER PRIMARY KEY,
+    rating TEXT NOT NULL CHECK (rating IN ('good','bad')),
+    text TEXT NOT NULL,
+    temperature REAL NOT NULL,
+    bias REAL NOT NULL,
+    seed INTEGER NOT NULL,
+    model_version TEXT NOT NULL,
+    dots_json TEXT NOT NULL,
+    comment TEXT,
+    locale TEXT,
+    status TEXT NOT NULL DEFAULT 'new'
+      CHECK (status IN ('new','reviewed','promoted')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX idx_demo_feedback_status ON demo_feedback(status);
+  `,
 ];
 
 export function migrate(): void {

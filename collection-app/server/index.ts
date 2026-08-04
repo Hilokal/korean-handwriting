@@ -9,6 +9,7 @@ import { authRoutes } from "./routes/auth.routes.js";
 import { workRoutes } from "./routes/work.routes.js";
 import { adminRoutes } from "./routes/admin.routes.js";
 import { exportRoutes } from "./routes/export.routes.js";
+import { feedbackAdminRoutes, feedbackRoutes } from "./routes/feedback.routes.js";
 
 migrate();
 seedSentences();
@@ -21,7 +22,9 @@ app.use("/api", requireJson);
 
 app.use("/api", authRoutes);
 app.use("/api/work", workRoutes);
+app.use("/api/feedback", feedbackRoutes); // public: demo-site feedback (CORS)
 app.use("/api/admin/export", exportRoutes);
+app.use("/api/admin/feedback", feedbackAdminRoutes);
 app.use("/api/admin", adminRoutes);
 
 app.get("/api/health", (_req, res) => {

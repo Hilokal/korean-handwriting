@@ -10,6 +10,7 @@ export function AdminLayout() {
         <NavLink to="/admin/progress">Progress</NavLink>
         <NavLink to="/admin/recordings">Recordings</NavLink>
         <NavLink to="/admin/reports">Reports</NavLink>
+        <NavLink to="/admin/feedback">Feedback</NavLink>
         <a href="/api/admin/export" className="export-link">
           Export zip
         </a>
