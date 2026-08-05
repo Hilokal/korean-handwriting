@@ -47,20 +47,25 @@ try {
   );
   console.log(`strokes drawing (total path d length so far: ${pathLen})`);
 
-  // Pressure rendering: stroke widths must actually vary across strokes.
-  const widths = await page.evaluate(() =>
-    Array.from(
-      new Set(
-        Array.from(document.querySelectorAll(".pen-canvas path")).map((p) =>
-          p.getAttribute("stroke-width"),
-        ),
-      ),
-    ),
+  // Pressure rendering: the canvas draws filled ribbon outlines (per-point
+  // width), not stroked polylines. Wait for a few strokes to be revealed —
+  // the pen-speed reveal lags generation.
+  await page.waitForFunction(
+    () => document.querySelectorAll(".pen-canvas path").length >= 3,
+    { timeout: 20000 },
   );
-  if (widths.length < 2) {
-    throw new Error(`expected varied pressure widths, got ${widths.join(",")}`);
+  const ribbons = await page.evaluate(() => {
+    const paths = Array.from(document.querySelectorAll(".pen-canvas path"));
+    return {
+      n: paths.length,
+      filled: paths.every((p) => p.getAttribute("fill") === "currentColor"),
+      capped: paths.every((p) => (p.getAttribute("d") ?? "").includes("A ")),
+    };
+  });
+  if (ribbons.n < 3 || !ribbons.filled || !ribbons.capped) {
+    throw new Error(`expected filled ribbon strokes, got ${JSON.stringify(ribbons)}`);
   }
-  console.log(`pressure widths vary (${widths.length} distinct values)`);
+  console.log(`pressure ribbons: ${ribbons.n} filled stroke outlines`);
 
   // Wait for generation to finish (points count appears in status line).
   await page.waitForFunction(

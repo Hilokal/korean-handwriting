@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Dot } from "../lib/generator";
-import { pressureWidthFactor } from "../lib/strokes";
+import { strokeRibbonPath } from "../lib/strokes";
 
 // Live pen view. Points stream into `store.dots` (a mutable ref shared with
 // App) while generation runs; this component reveals them at pen speed with
@@ -73,28 +73,20 @@ export default function HandwritingCanvas({
       // Pen tip ~7% of line height (see animatedSvg.ts); width-relative
       // sizing over-inks long lines.
       const strokeWidth = Math.max((maxY - minY) * 0.07, spanX * 0.008);
-      // One path per stroke so each stroke carries its own pressure width
-      // (mean force of its points — matches animatedSvg.ts).
+      // One FILLED ribbon path per stroke: per-point pressure width, so the
+      // taper into stroke ends (the model's clearest pressure signature) is
+      // visible. Same element count as stroked paths — cheap per frame.
       const parts: string[] = [];
-      let d = "";
-      let fSum = 0;
-      let fN = 0;
+      let cur: { x: number; y: number; pen: number; f: number }[] = [];
       const flush = () => {
-        if (!d) return;
-        const sw = strokeWidth * (fN ? fSum / fN : 1);
+        if (!cur.length) return;
         parts.push(
-          `<path d="${d}" fill="none" stroke="currentColor" ` +
-            `stroke-width="${sw.toFixed(3)}" ` +
-            `stroke-linecap="round" stroke-linejoin="round"/>`,
+          `<path d="${strokeRibbonPath(cur, strokeWidth)}" fill="currentColor"/>`,
         );
-        d = "";
-        fSum = 0;
-        fN = 0;
+        cur = [];
       };
       for (const p of pts) {
-        d += `${d ? "L" : "M"} ${p.x.toFixed(2)} ${p.y.toFixed(2)} `;
-        fSum += pressureWidthFactor(p.f);
-        fN++;
+        cur.push(p);
         if (p.pen >= 0.5) flush();
       }
       flush();

@@ -450,10 +450,12 @@ Fixes landed, in order:
     stored modelVersion field is what flags them as old.
 
 **Still open:**
-- **Within-stroke pressure taper in the demo** — per-stroke mean width ships;
-  point-level taper needs a variable-width ribbon fill (like the collection
-  app's `strokeOutline`) that can't dash-animate; consider swapping the final
-  static frame to a ribbon render after the draw-on finishes.
+- **Within-stroke taper in the animated download SVG** — the live canvas now
+  renders filled ribbons with per-point width (`strokes.ts strokeRibbonPath`,
+  ported from the collection app's `strokeOutline`), but the downloadable
+  animated SVG keeps per-stroke mean widths: its draw-on is a
+  `stroke-dasharray` trick that only works on stroked paths. A static
+  (non-animated) download variant with ribbons would close the gap.
 - **End-of-line overrun on the 2026-08-05 checkpoint** (see progress #7):
   tune the window-termination threshold, verify across seeds, then promote +
   re-export ONNX for the demo.
