@@ -17,11 +17,16 @@ export interface Pt {
 export const FORCE_MEAN = 521.4;
 export const FORCE_STD = 138.7;
 
-/** Pressure -> stroke-width multiplier around the nominal width. Linear in
- * standardized force, clamped so outliers can't produce absurd strokes. */
+/** Pressure -> stroke-width multiplier around the nominal width.
+ *
+ * Calibrated to the collection app's strokeSvg mapping (5th-95th force
+ * percentile -> 0.3-1.3x base, so the MEDIAN stroke is 0.8x): the corpus
+ * force distribution spans ~±2.32 sigma, so its percentile window becomes a
+ * fixed linear ramp in standardized force — streaming-friendly, no
+ * per-drawing normalization pass needed. */
 export function pressureWidthFactor(fRaw: number): number {
   const z = (fRaw - FORCE_MEAN) / FORCE_STD;
-  return Math.min(1.9, Math.max(0.35, 1 + 0.4 * z));
+  return Math.min(1.3, Math.max(0.3, 0.8 + 0.215 * z));
 }
 
 /** Mean width factor over one stroke's points. */
