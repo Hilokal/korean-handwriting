@@ -264,6 +264,35 @@ Levers, in rough order of impact for the line data:
   `nn.GRU` would get. `get_device()` already prefers CUDA.
 - `DataLoader` is single-process (`num_workers=0`); marginal given caching.
 
+### Renting GPUs (RunPod) — the host CPU is what you're shopping for
+
+Because the per-timestep loop is **kernel-launch-bound** (~15-40% GPU util on
+an RTX 4090), epoch time tracks the host's *single-thread CPU speed*, not the
+GPU. Measured on the same run (954 lines, 3 layers, batch as-committed,
+2026-08-05):
+
+| Host | Epoch time |
+|------|-----------|
+| RTX 4090 + AMD EPYC 7K62 (2.6 GHz server chip, secure cloud) | ~38s |
+| Apple M1 (MPS, local) | ~17s |
+| RTX 4090 + Ryzen 9 7950X (5.9 GHz, secure cloud, EU-RO-1) | ~14.5s |
+
+Practical checklist (runpodctl 2.x):
+- **`lscpu` the pod before starting a long run.** Secure-cloud 4090s sit in
+  mixed hosts; an EPYC-Rome host is ~2.6x slower than a Ryzen one at identical
+  $/hr. Delete and re-roll if you land a slow CPU.
+- Re-creating without constraints can land the **same physical machine**
+  (compare the IP). Pin a datacenter instead: `--data-center-ids EU-RO-1`
+  (which is where the Ryzen 7950X hosts were); check stock with
+  `runpodctl datacenter list`.
+- Image: `runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404` boots in ~2 min;
+  the big `2.8.0-*-devel` image once hung "not ready" indefinitely on pull.
+- `pip install --break-system-packages numpy` (PEP 668), run in tmux with
+  `python -u` (block buffering otherwise hides the log), rsync code+data to
+  `/workspace/korean-handwriting/` (train.py expects `../data/export`).
+- Delete the pod as soon as the checkpoint is pulled — `runpodctl pod delete`
+  (there is no `terminate` subcommand).
+
 ## Progress log / next experiment
 
 Fixes landed, in order:
@@ -298,7 +327,27 @@ Fixes landed, in order:
    0 = off). Position is threaded through the state so step-by-step generation
    matches full-sequence training exactly.
 
+7. **2026-08-05 retrain on the grown export (954 lines, was ~800).** RunPod
+   RTX 4090 (Ryzen host), 3-layer emb8: early-stopped at epoch 630, best val
+   **−3.7978**, 2h35m wall (~$2). Same-seed side-by-side renders vs the bundled
+   checkpoint: **letterforms clearly improved** (e.g. "아름다운 문자입니다"
+   nearly fully legible where the old model garbles it) — more data helped.
+   Two lessons: (a) val NLL is **not comparable across dataset changes** (the
+   val split is different sentences — a different yardstick; compare renders,
+   or re-evaluate both checkpoints on one fixed val set); (b) train/val moved
+   in lockstep the whole run — no overfitting despite early worries. Checkpoint
+   kept locally as `best_model.new.pt`, **not promoted**: it consistently
+   overruns the end of line (stray strokes/dots after the last character) —
+   kappa advances more slowly near the end than the old model, so the
+   `kappa.mean() >= U` stop fires late. Candidate fix at sampling time (no
+   retrain): tighten the threshold (e.g. `>= U - 0.5`) or use Graves' proper
+   phi-based termination; the same logic is duplicated in
+   `demo-app/src/lib/generator.ts` — change both.
+
 **Still open:**
+- **End-of-line overrun on the 2026-08-05 checkpoint** (see progress #7):
+  tune the window-termination threshold, verify across seeds, then promote +
+  re-export ONNX for the demo.
 - Does absolute position fix the horizontal compression? (The reason for #6; judge
   on the rendered w/h ratio, not just loss.) Requires a fresh run — the input width
   changed, so old checkpoints do not load.
@@ -325,3 +374,7 @@ connections (see the ~1.05 predictability ceiling in the progress log).
   GRU parameter names differ and the window/symbol heads are new. They are kept
   only as historical artifacts; the window model must be retrained from scratch.
 - `best_model.pt` — overwritten by the current (window + multi-char) training run.
+- `best_model.new.pt` — the 2026-08-05 retrain on 954 lines (local only,
+  gitignored; log in `train-2026-08-05.log`). Better letterforms than the
+  bundled model but not promoted pending the end-of-line-overrun fix
+  (progress #7).
