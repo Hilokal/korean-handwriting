@@ -10,6 +10,7 @@
 import { Dot } from "./generator";
 import {
   bounds,
+  normalizedPressure,
   splitStrokes,
   strokeLength,
   strokeWidthFactor,
@@ -44,6 +45,7 @@ export function toAnimatedSvg(dots: Dot[], opts: AnimatedSvgOptions = {}): strin
   // single flat glyphs (h ≈ 0) visible.
   const strokeWidth = Math.max(h * 0.07, Math.max(w, h) * 0.008);
 
+  const fnorm = normalizedPressure(strokes);
   const drawTimes = strokes.map((s) => Math.max(s.length, 1) * secondsPerPoint);
   const total =
     drawTimes.reduce((a, v) => a + v, 0) +
@@ -61,7 +63,7 @@ export function toAnimatedSvg(dots: Dot[], opts: AnimatedSvgOptions = {}): strin
     // Pressure: each stroke is drawn at its mean force's width (the dash-based
     // draw-on needs one width per path; within-stroke taper would need a
     // ribbon fill that can't dash-animate).
-    const sw = strokeWidth * strokeWidthFactor(s);
+    const sw = strokeWidth * strokeWidthFactor(fnorm[i]);
     const common =
       `fill="none" stroke="${color}" stroke-width="${sw.toFixed(3)}" ` +
       'stroke-linecap="round" stroke-linejoin="round"';

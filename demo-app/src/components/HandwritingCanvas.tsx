@@ -1,6 +1,11 @@
 import { useEffect, useRef } from "react";
 import { Dot } from "../lib/generator";
-import { strokeRibbonPath } from "../lib/strokes";
+import {
+  Pt,
+  normalizedPressure,
+  splitStrokes,
+  strokeRibbonPath,
+} from "../lib/strokes";
 
 // Live pen view. Points stream into `store.dots` (a mutable ref shared with
 // App) while generation runs; this component reveals them at pen speed with
@@ -51,11 +56,14 @@ export default function HandwritingCanvas({
         minY = 0,
         maxX = 0,
         maxY = 0;
-      const pts: { x: number; y: number; pen: number; f: number }[] = [];
+      // ALL generated points, not just revealed ones: the bounds settle as
+      // soon as generation does, and pressure normalization (percentiles
+      // over the whole drawing) stays stable while the pen reveals.
+      const allPts: Pt[] = [];
       for (let i = 0; i < dots.length; i++) {
         x += dots[i].x;
         y += dots[i].y;
-        if (i < reveal) pts.push({ x, y, pen: dots[i].penState, f: dots[i].f });
+        allPts.push({ x, y, pen: dots[i].penState, f: dots[i].f });
         if (x < minX) minX = x;
         if (y < minY) minY = y;
         if (x > maxX) maxX = x;
@@ -75,21 +83,24 @@ export default function HandwritingCanvas({
       const strokeWidth = Math.max((maxY - minY) * 0.07, spanX * 0.008);
       // One FILLED ribbon path per stroke: per-point pressure width, so the
       // taper into stroke ends (the model's clearest pressure signature) is
-      // visible. Same element count as stroked paths — cheap per frame.
+      // visible. Normalization runs over the full drawing; only the first
+      // `reveal` points are rendered (the last stroke may be partial).
+      const strokes = splitStrokes(allPts);
+      const fnorm = normalizedPressure(strokes);
       const parts: string[] = [];
-      let cur: { x: number; y: number; pen: number; f: number }[] = [];
-      const flush = () => {
-        if (!cur.length) return;
+      let remaining = reveal;
+      for (let i = 0; i < strokes.length && remaining > 0; i++) {
+        const s = strokes[i];
+        const n = Math.min(s.length, remaining);
+        remaining -= n;
         parts.push(
-          `<path d="${strokeRibbonPath(cur, strokeWidth)}" fill="currentColor"/>`,
+          `<path d="${strokeRibbonPath(
+            s.slice(0, n),
+            fnorm[i].slice(0, n),
+            strokeWidth,
+          )}" fill="currentColor"/>`,
         );
-        cur = [];
-      };
-      for (const p of pts) {
-        cur.push(p);
-        if (p.pen >= 0.5) flush();
       }
-      flush();
       svg.innerHTML = parts.join("");
 
       if (!doneRef.current && dots.length > 0 && reveal >= dots.length) {

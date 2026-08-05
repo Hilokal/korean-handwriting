@@ -17,26 +17,58 @@ export interface Pt {
 export const FORCE_MEAN = 521.4;
 export const FORCE_STD = 138.7;
 
-/** Pressure -> stroke-width multiplier around the nominal width.
- *
- * Calibrated to the collection app's strokeSvg mapping (5th-95th force
- * percentile -> 0.3-1.3x base, so the MEDIAN stroke is 0.8x): the corpus
- * force distribution spans ~±2.32 sigma, so its percentile window becomes a
- * fixed linear ramp in standardized force — streaming-friendly, no
- * per-drawing normalization pass needed. */
-export function pressureWidthFactor(fRaw: number): number {
-  const z = (fRaw - FORCE_MEAN) / FORCE_STD;
-  return Math.min(1.3, Math.max(0.3, 0.8 + 0.215 * z));
+// Width window: the 5th-95th percentile of the DRAWING'S OWN force range maps
+// to 0.3x-1.3x of the base width (collection-app strokeSvg / render.py
+// convention). Per-drawing normalization matters for generated ink: sampling
+// bias compresses the model's force range, and a fixed corpus-wide ramp left
+// biased drawings looking near-uniform — percentiles stretch whatever
+// dynamic range a drawing has to the full window.
+export const WIDTH_MIN = 0.3;
+export const WIDTH_RANGE = 1.0;
+
+const SMOOTH_RADIUS = 2; // moving-average half-window, in points (per stroke)
+
+function quantile(sorted: number[], q: number): number {
+  if (sorted.length === 0) return 0;
+  const idx = (sorted.length - 1) * q;
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
 }
 
-/** Mean width factor over one stroke's points. (Used by the animated SVG,
- * whose dash-based draw-on needs a single width per path; the live canvas
- * uses strokeRibbonPath for true per-point width.) */
-export function strokeWidthFactor(stroke: Pt[]): number {
-  if (stroke.length === 0) return 1;
+/** Per-point pressure in 0..1 for a whole drawing: smoothed within each
+ * stroke (the sensor and the model's samples are noisy point to point), then
+ * normalized against the drawing's own 5th-95th percentile range. Ported
+ * from collection-app strokeSvg.ts (normalizedPressure) — keep in sync. */
+export function normalizedPressure(strokes: Pt[][]): number[][] {
+  const smoothed = strokes.map((stroke) => {
+    const row = new Array<number>(stroke.length);
+    for (let j = 0; j < stroke.length; j++) {
+      const from = Math.max(0, j - SMOOTH_RADIUS);
+      const to = Math.min(stroke.length - 1, j + SMOOTH_RADIUS);
+      let s = 0;
+      for (let k = from; k <= to; k++) s += stroke[k].f;
+      row[j] = s / (to - from + 1);
+    }
+    return row;
+  });
+  const all = smoothed.flat().sort((a, b) => a - b);
+  const lo = quantile(all, 0.05);
+  const hi = quantile(all, 0.95);
+  if (hi - lo < 1e-9) return smoothed.map((r) => r.map(() => 0.5));
+  return smoothed.map((r) =>
+    r.map((f) => Math.min(1, Math.max(0, (f - lo) / (hi - lo)))),
+  );
+}
+
+/** Mean width factor for one stroke given its normalized-pressure row. (Used
+ * by the animated SVG, whose dash-based draw-on needs a single width per
+ * path; the live canvas uses strokeRibbonPath for true per-point width.) */
+export function strokeWidthFactor(fnorm: number[]): number {
+  if (fnorm.length === 0) return 1;
   let s = 0;
-  for (const p of stroke) s += pressureWidthFactor(p.f);
-  return s / stroke.length;
+  for (const v of fnorm) s += v;
+  return WIDTH_MIN + WIDTH_RANGE * (s / fnorm.length);
 }
 
 export type RibbonPoint = { x: number; y: number; hw: number };
@@ -86,20 +118,17 @@ export function strokeOutline(pts: RibbonPoint[]): string {
   );
 }
 
-const SMOOTH_RADIUS = 2; // moving-average half-window, in points (per stroke)
-
 /** One stroke -> filled-ribbon path data with per-point pressure width.
- * `baseWidth` is the nominal stroke width (a diameter, like stroke-width);
- * force is smoothed within the stroke before mapping — the raw sensor (and
- * the model's samples) are noisy point to point. */
-export function strokeRibbonPath(stroke: Pt[], baseWidth: number): string {
+ * `fnorm` is the stroke's row from normalizedPressure(); `baseWidth` is the
+ * nominal stroke width (a diameter, like stroke-width). */
+export function strokeRibbonPath(
+  stroke: Pt[],
+  fnorm: number[],
+  baseWidth: number,
+): string {
   const ribbon: RibbonPoint[] = [];
   for (let j = 0; j < stroke.length; j++) {
-    const from = Math.max(0, j - SMOOTH_RADIUS);
-    const to = Math.min(stroke.length - 1, j + SMOOTH_RADIUS);
-    let f = 0;
-    for (let k = from; k <= to; k++) f += stroke[k].f;
-    const hw = (baseWidth * pressureWidthFactor(f / (to - from + 1))) / 2;
+    const hw = (baseWidth * (WIDTH_MIN + WIDTH_RANGE * fnorm[j])) / 2;
     const p = stroke[j];
     const last = ribbon[ribbon.length - 1];
     if (last && Math.abs(last.x - p.x) < 1e-6 && Math.abs(last.y - p.y) < 1e-6) {
