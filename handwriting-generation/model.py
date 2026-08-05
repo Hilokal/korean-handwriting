@@ -14,7 +14,9 @@ from tokenizer import LeadingCount, SymbolCount, TrailingCount, VowelCount, toke
 class HandwritingRNN(nn.Module):
     """Simple GRU-based RNN for handwriting generation.
 
-    Predicts the next point (x, y, penState) given a sequence of previous points.
+    Predicts the next point (dx, dy, penState, f) given a sequence of previous
+    points -- f is the pen tip force (absolute, standardized), modeled inside
+    the MDN so pressure is coupled to the chosen direction mode.
     """
 
     gru: GRUWithSlidingAttention
@@ -28,7 +30,7 @@ class HandwritingRNN(nn.Module):
 
     def __init__(
         self,
-        input_size=3,
+        input_size=4,
         hidden_size=256,
         num_layers=2,
         dropout=0.1,
@@ -75,38 +77,46 @@ class HandwritingRNN(nn.Module):
         # the output, the heads read all layers' hidden states concatenated, so
         # their input width is hidden_size * num_layers.
         head_in = hidden_size * num_layers
-        # MDN head: a mixture of K bivariate Gaussians over the next (dx, dy).
-        # Each component needs 6 params: pi(1) + mu(2) + sigma(2) + rho(1).
-        self.mdn_head = nn.Linear(head_in, num_mixtures * 6)
+        # MDN head: a mixture of K Gaussians over the next (dx, dy, f) -- per
+        # component a bivariate Gaussian over (dx, dy) with correlation rho,
+        # times an independent univariate Gaussian over the pressure f. Pressure
+        # couples to direction through the *component* (mode-dependent means),
+        # not through a full 3x3 covariance.
+        # Each component needs 8 params: pi(1) + mu(3) + sigma(3) + rho(1).
+        self.mdn_head = nn.Linear(head_in, num_mixtures * 8)
 
         # Binary end-of-stroke head (1 logit -> sigmoid). Reading every layer lets
         # it see the stroke-end signal, which lives in layer 1 (not the top layer).
         self.pen_head = nn.Linear(head_in, 1)
 
         # Start sigma near data scale so densities aren't absurd early on.
-        # Bias layout matches the split order: [pi, mu, log_sigma, rho].
+        # Bias layout matches the split order: [pi (K), mu (3K), log_sigma (3K),
+        # rho (K)] -- so log_sigma occupies [4K, 7K).
         K = num_mixtures
         with torch.no_grad():
-            self.mdn_head.bias[3 * K : 5 * K].fill_(0.0)  # log_sigma -> sigma = 1
+            self.mdn_head.bias[4 * K : 7 * K].fill_(0.0)  # log_sigma -> sigma = 1
 
     def mdn_params(self, raw: torch.Tensor):
         """Split a raw MDN head output into distribution parameters.
 
         Args:
-            raw: (..., 6K) output of mdn_head
+            raw: (..., 8K) output of mdn_head
 
         Returns:
             pi_logits: (..., K)     mixture weights (pre-softmax)
-            mu:        (..., K, 2)  per-component means of (dx, dy)
-            log_sigma: (..., K, 2)  per-component log std (exp -> positive sigma)
+            mu:        (..., K, 3)  per-component means of (dx, dy, f) -- f is
+                                    the next point's *absolute* standardized
+                                    pressure, not a delta
+            log_sigma: (..., K, 3)  per-component log std (exp -> positive sigma)
             rho:       (..., K)     per-component x-y correlation in (-1, 1)
+                                    (pressure is independent within a component)
         """
         K = self.num_mixtures
         pi_logits, mu, log_sigma, rho_raw = torch.split(
-            raw, [K, 2 * K, 2 * K, K], dim=-1
+            raw, [K, 3 * K, 3 * K, K], dim=-1
         )
-        mu = mu.reshape(*mu.shape[:-1], K, 2)
-        log_sigma = log_sigma.reshape(*log_sigma.shape[:-1], K, 2)
+        mu = mu.reshape(*mu.shape[:-1], K, 3)
+        log_sigma = log_sigma.reshape(*log_sigma.shape[:-1], K, 3)
         rho = torch.tanh(rho_raw)
         return pi_logits, mu, log_sigma, rho
 
@@ -123,19 +133,22 @@ class HandwritingRNN(nn.Module):
                     [leading, vowel, trailing, symbol]. symbol 0 = Hangul syllable
                     (use the jamo slots); symbol >= 1 = a space/punctuation token.
                     U is the (padded) number of units.
-            x: Input tensor of shape (batch, seq_len, 3) containing [dx, dy, penState]
+            x: Input tensor of shape (batch, seq_len, 4) containing
+               [dx, dy, penState, f] (f = absolute standardized pen force)
             token_mask: (batch, U) bool, True = real character, False = padding.
                         None treats every character as real.
             state: Optional (hidden, w, kappa) from a previous forward pass, for
                    step-by-step generation.
 
         Returns:
-            mdn_raw: Raw MDN head output (batch, seq_len, 6*num_mixtures).
+            mdn_raw: Raw MDN head output (batch, seq_len, 8*num_mixtures).
                      Use mdn_params() to split into (pi, mu, sigma, rho).
             pen_out: Predicted end-of-stroke logits (batch, seq_len, 1)
             state:   ((hidden, w, kappa), abs_pos) -- GRU/window state plus the
                      running absolute position, threaded across generation steps
-            phi:     (batch, seq_len, U) attention weights over characters
+            phi:     (batch, seq_len, U+1) attention weights over characters,
+                     plus a final phantom past-the-end column (see
+                     GRUWithSlidingAttention.forward)
         """
         # Split the combined state into the GRU/window state and the running
         # absolute position carried across step-by-step generation calls.
@@ -187,7 +200,7 @@ class HandwritingRNN(nn.Module):
         """Generate a handwriting sequence autoregressively.
 
         Args:
-            start_seq: Starting sequence tensor of shape (1, seq_len, 3)
+            start_seq: Starting sequence tensor of shape (1, seq_len, 4)
             character: Korean hanguel character to generate
             max_len: Maximum number of points to generate
             temperature: Sampling temperature for the end-of-stroke sigmoid
@@ -200,7 +213,7 @@ class HandwritingRNN(nn.Module):
             device: Device to run on
 
         Returns:
-            Generated sequence tensor of shape (1, total_len, 3)
+            Generated sequence tensor of shape (1, total_len, 4)
         """
         _ = self.eval()
         generated = start_seq.clone().to(device)
@@ -224,26 +237,33 @@ class HandwritingRNN(nn.Module):
                     p = torch.sigmoid(pen_logit / temperature)
                     pen_state = torch.bernoulli(p)  # (1, 1)
 
-                # --- offset (dx, dy): sample from the mixture ---
+                # --- offset (dx, dy) + pressure f: sample from the mixture ---
                 pi_logits, mu, log_sigma, rho = self.mdn_params(mdn_raw[:, -1])
-                # (1, K), (1, K, 2), (1, K, 2), (1, K)
+                # (1, K), (1, K, 3), (1, K, 3), (1, K)
                 pi = torch.softmax(pi_logits * (1 + bias), dim=-1)
                 sigma = torch.exp(log_sigma - bias)
 
                 k = torch.multinomial(pi, 1).item()  # pick a component
-                mx, my = mu[0, k]
-                sx, sy = sigma[0, k]
+                mx, my, mf = mu[0, k]
+                sx, sy, sf = sigma[0, k]
                 r = rho[0, k]
 
-                # Sample the bivariate Gaussian via the Cholesky factor of its cov.
-                z1, z2 = torch.randn(2, device=device)
+                # Sample the bivariate Gaussian via the Cholesky factor of its
+                # cov; pressure is independent within the component (its coupling
+                # to direction comes from sharing the mixture pick k). f is the
+                # next point's absolute standardized force, clamped to ~the data
+                # range so the fed-back input stays in-distribution.
+                z1, z2, z3 = torch.randn(3, device=device)
                 dx = mx + sx * z1
                 dy = my + r * sy * z1 + sy * torch.sqrt(1 - r**2) * z2
+                f = torch.clamp(mf + sf * z3, -3.0, 3.0)
 
                 last_xy = torch.stack([dx, dy]).reshape(1, 1, 2)
 
-                # Combine into next input ([dx, dy, end_of_stroke])
-                next_point = torch.cat([last_xy, pen_state.unsqueeze(-1)], dim=-1)
+                # Combine into next input ([dx, dy, end_of_stroke, f])
+                next_point = torch.cat(
+                    [last_xy, pen_state.unsqueeze(-1), f.reshape(1, 1, 1)], dim=-1
+                )
                 generated = torch.cat([generated, next_point], dim=1)
 
                 # Terminate after the character's expected number of strokes.
@@ -257,14 +277,24 @@ class HandwritingRNN(nn.Module):
                     tokens, next_point, token_mask, state
                 )
 
-                # Multi-character termination: stop once the attention window has
-                # slid past the last character. Approximates Graves' phi(t, U+1) >
-                # phi(t, u) test via the window centre kappa. Used only when
-                # stroke-count termination isn't requested (single-char inference
-                # passes num_strokes, so this branch is skipped there).
-                # kappa lives in the GRU/window part of the combined state.
-                kappa = state[0][2]
-                if num_strokes is None and U > 1 and kappa.mean().item() >= U:
+                # Multi-character termination: Graves' phi-based test -- stop
+                # once the window puts more weight on the phantom position one
+                # past the text (phi's last column) than on any real character.
+                # This reads the attention itself, unlike the old
+                # kappa.mean() >= U heuristic, which depended on how a given
+                # checkpoint happened to arrange its kappa components (one
+                # checkpoint fired late, the next early). Deferred until the
+                # current stroke ends so the cut never leaves a dangling
+                # partial stroke; max_len remains the backstop. Used only when
+                # stroke-count termination isn't requested (single-char
+                # inference passes num_strokes, so this branch is skipped).
+                phi_t = phi[0, -1]  # (U+1,)
+                if (
+                    num_strokes is None
+                    and U > 1
+                    and pen_state.item() == 1
+                    and phi_t[U].item() > phi_t[:U].max().item()
+                ):
                     break
 
         return generated
@@ -360,8 +390,11 @@ class GRUWithSlidingAttention(nn.Module):
             output: (B, S, hidden_size * num_layers) -- every layer's hidden state
                     concatenated (the output skip connection), fed to the heads.
             state:  (hidden, w, kappa) final recurrent + window state.
-            phi:    (B, S, U) attention weight per character per step (for
-                    monitoring the window slide and for termination).
+            phi:    (B, S, U+1) attention weight per character per step. The
+                    extra last column is the *phantom* position one past the
+                    text (Graves' termination test: stop when phi(t, U) exceeds
+                    every real character's phi). Only the first U columns are
+                    masked and used for the window vector w.
         """
         B = x_seq.size(0)
         U = c.size(1)
@@ -378,7 +411,9 @@ class GRUWithSlidingAttention(nn.Module):
         else:
             hidden, w, kappa = state
 
-        u = torch.arange(U, device=device).view(1, 1, U)  # (1, 1, U)
+        # Character-index grid extended by one phantom position past the text,
+        # so phi is also evaluated at u = U for Graves' termination test.
+        u = torch.arange(U + 1, device=device).view(1, 1, U + 1)  # (1, 1, U+1)
 
         outputs = []
         phis = []
@@ -397,9 +432,11 @@ class GRUWithSlidingAttention(nn.Module):
             kappa = kappa + torch.exp(self.kappa_head(h))  # (B, K), monotonic
             phi = (alpha * torch.exp(-beta * (kappa.unsqueeze(-1) - u) ** 2)).sum(
                 1
-            )  # (B, U)
-            phi = phi * c_mask  # drop padding characters (no renormalisation, per Graves)
-            w = torch.bmm(phi.unsqueeze(1), c).squeeze(1)  # w_t (current window)
+            )  # (B, U+1); last column = phantom past-end position (unmasked)
+            phi_real = (
+                phi[:, :U] * c_mask
+            )  # drop padding characters (no renormalisation, per Graves)
+            w = torch.bmm(phi_real.unsqueeze(1), c).squeeze(1)  # w_t (current window)
 
             # Higher layers: input skip (x_t) + layer below + current window (w_t).
             # Dropout on the vertical path only, so the recurrent state stays clean.
@@ -412,9 +449,9 @@ class GRUWithSlidingAttention(nn.Module):
 
             # Output skip: the heads read every layer's hidden state.
             outputs.append(torch.cat(new_hidden, dim=-1))  # (B, hidden * num_layers)
-            phis.append(phi)
+            phis.append(torch.cat([phi_real, phi[:, U:]], dim=-1))  # masked + phantom
             hidden = torch.stack(new_hidden, dim=0)
 
         output = torch.stack(outputs, dim=1)  # (B, S, hidden * num_layers)
-        phi_seq = torch.stack(phis, dim=1)  # (B, S, U)
+        phi_seq = torch.stack(phis, dim=1)  # (B, S, U+1)
         return output, (hidden, w, kappa), phi_seq

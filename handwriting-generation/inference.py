@@ -3,7 +3,7 @@ import json
 import os
 
 import torch
-from handwriting_dataset import HandwritingDataset
+from handwriting_dataset import FORCE_MEAN, FORCE_STD, HandwritingDataset
 from model import HandwritingRNN
 
 
@@ -19,7 +19,7 @@ def load_model(checkpoint_path, device):
     # Must match how the checkpoint was trained (see train.py). Override via
     # HIDDEN_SIZE / NUM_LAYERS to load a wider or deeper checkpoint.
     model = HandwritingRNN(
-        input_size=3,
+        input_size=4,
         hidden_size=int(os.environ.get("HIDDEN_SIZE", "128")),
         num_layers=int(os.environ.get("NUM_LAYERS", "2")),
         dropout=0.0,
@@ -49,7 +49,7 @@ def generate_sequence(
     Args:
         model: Trained model
         device: Device to run on
-        seed_seq: Optional starting sequence tensor (1, seq_len, 3)
+        seed_seq: Optional starting sequence tensor (1, seq_len, 4)
                   If None, starts with a single point at origin
         max_len: Maximum points to generate
         temperature: Sampling temperature (higher = more random)
@@ -58,15 +58,16 @@ def generate_sequence(
         bias: MDN sampling bias. Higher = tighter/cleaner, less varied strokes.
 
     Returns:
-        Generated sequence as numpy array of shape (seq_len, 3)
+        Generated sequence as numpy array of shape (seq_len, 4)
     """
     if seed is not None:
         torch.manual_seed(seed)
 
     if seed_seq is None:
         # Start with a single point at origin. penState=0 (mid-stroke) matches
-        # the training convention where the first point is not an end-of-stroke.
-        seed_seq = torch.tensor([[[0.0, 0.0, 0.0]]], dtype=torch.float32)
+        # the training convention where the first point is not an end-of-stroke;
+        # f=0 is the corpus-mean pen force in standardized units.
+        seed_seq = torch.tensor([[[0.0, 0.0, 0.0, 0.0]]], dtype=torch.float32)
 
     seed_seq = seed_seq.to(device)
     generated = model.generate(
@@ -83,16 +84,21 @@ def generate_sequence(
 
 
 def sequence_to_json(sequence):
-    """Convert sequence array to JSON-serializable format."""
+    """Convert sequence array to JSON-serializable format.
+
+    Pressure is de-standardized back to raw pen force units so generated.json
+    matches the recordings' scale (render.py normalizes per-drawing anyway).
+    """
     dots = []
     for point in sequence:
-        dots.append(
-            {
-                "x": float(point[0]),
-                "y": float(point[1]),
-                "penState": int(point[2]),
-            }
-        )
+        dot = {
+            "x": float(point[0]),
+            "y": float(point[1]),
+            "penState": int(point[2]),
+        }
+        if len(point) > 3:
+            dot["f"] = float(point[3]) * FORCE_STD + FORCE_MEAN
+        dots.append(dot)
     return {"dots": dots}
 
 

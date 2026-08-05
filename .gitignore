@@ -4,9 +4,12 @@ venv/
 __pycache__/
 *.pyc
 
-# Model checkpoints — large binaries; the one bundled demo model is force-added.
+# Model checkpoints — large binaries; the bundled models are force-added.
+# best_model.pressure.pt is the current bundled model; best_model.emb8.pt is
+# the pre-pressure one, kept as a historical artifact (no longer loads).
 *.pt
 !handwriting-generation/best_model.emb8.pt
+!handwriting-generation/best_model.pressure.pt
 checkpoint.pt
 
 # Data — recordings and the production export are not committed (see download_export.sh).

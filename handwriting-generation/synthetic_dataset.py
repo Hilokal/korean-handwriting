@@ -22,8 +22,8 @@ def concat_samples(
 ) -> HandwritingData:
     """Stitch single-character samples into one multi-character sample.
 
-    Each input is a single-char HandwritingData: strokes (N, 3) of deltas
-    [dx, dy, penState], tokens (1, 3). Each glyph is reconstructed to absolute
+    Each input is a single-char HandwritingData: strokes (N, 4) of deltas
+    [dx, dy, penState, f], tokens (1, 3). Each glyph is reconstructed to absolute
     coordinates, laid out left-to-right (gap between glyphs = `gap_frac` of the
     glyph's own width, so it is scale-invariant -- this data is normalized to
     ~2px glyphs) with baselines aligned, then re-encoded as deltas.
@@ -33,9 +33,10 @@ def concat_samples(
     end-of-stroke, the between-glyph move renders as a pen-up jump -- the same
     inter-character motion real line data will contain.
 
-    Returns HandwritingData with strokes (M, 3) and tokens (U, 3), U = len(samples).
+    Returns HandwritingData with strokes (M, 4) and tokens (U, 3), U = len(samples).
     """
-    abs_pts: list[tuple[float, float, float]] = []  # (x, y, penState), absolute
+    # (x, y, penState, f); x/y absolute, f already standardized (absolute too)
+    abs_pts: list[tuple[float, float, float, float]] = []
     tokens: list[torch.Tensor] = []
     x_offset = 0.0
 
@@ -50,16 +51,18 @@ def concat_samples(
         ys = cum[:, 1] - gy_min  # baseline at y = 0
 
         for i in range(strokes.size(0)):
-            abs_pts.append((xs[i].item(), ys[i].item(), strokes[i, 2].item()))
+            abs_pts.append(
+                (xs[i].item(), ys[i].item(), strokes[i, 2].item(), strokes[i, 3].item())
+            )
 
         width = (cum[:, 0].max() - gx_min).item()
         x_offset += width * (1.0 + gap_frac)
 
-    # Re-encode the laid-out line as deltas.
+    # Re-encode the laid-out line as deltas (f stays absolute).
     out = []
     px, py = abs_pts[0][0], abs_pts[0][1]
-    for x, y, pen in abs_pts:
-        out.append([x - px, y - py, pen])
+    for x, y, pen, f in abs_pts:
+        out.append([x - px, y - py, pen, f])
         px, py = x, y
 
     return {

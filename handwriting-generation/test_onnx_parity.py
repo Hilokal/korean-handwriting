@@ -46,7 +46,8 @@ def main():
 
     tokens = tokenize(TEXT).unsqueeze(0)  # (1, U, 4)
     U = tokens.size(1)
-    u = torch.arange(U, dtype=torch.float32).view(1, 1, U)
+    # U+1 indices: the last is the phantom past-the-end position (phi column U)
+    u = torch.arange(U + 1, dtype=torch.float32).view(1, 1, U + 1)
     mask = torch.ones(1, U)
     L, H = args.num_layers, args.hidden_size
     W, K = model.gru.window_dim, model.gru.sliding_window_k
@@ -61,15 +62,16 @@ def main():
     # ONNX state
     oh, ow_, ok_, op_ = (t.numpy().copy() for t in (wh, ww, wk, wp))
 
-    # Realistic-magnitude random pen deltas (training data is ~unit scale).
-    xs = torch.randn(STEPS, 3) * 0.7
+    # Realistic-magnitude random pen inputs [dx, dy, penState, f] (deltas are
+    # ~unit scale; f is standardized force, also ~unit scale).
+    xs = torch.randn(STEPS, 4) * 0.7
     xs[:, 2] = (torch.rand(STEPS) < 0.08).float()  # occasional pen lifts
-    xs[0] = torch.tensor([0.0, 0.0, 0.0])
+    xs[0] = torch.tensor([0.0, 0.0, 0.0, 0.0])
 
     max_wrapper = max_onnx = 0.0
     with torch.no_grad():
         for t in range(STEPS):
-            x = xs[t : t + 1]  # (1, 3)
+            x = xs[t : t + 1]  # (1, 4)
 
             mdn_ref, pen_ref, ref_state, _phi = model(
                 tokens, x.unsqueeze(1), mask, ref_state

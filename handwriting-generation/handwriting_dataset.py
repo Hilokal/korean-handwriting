@@ -12,6 +12,14 @@ HERE = Path(__file__).resolve().parent
 
 characters = ["간", "안", "아"]
 
+# Pen tip force standardization constants, measured over every pen-move dot in
+# the production export (../data/export, 724k dots): raw sensor units, roughly
+# 200..850. Strokes carry force standardized by these; sequence_to_json
+# (inference.py) de-standardizes back to raw units so generated output matches
+# the recordings' scale.
+FORCE_MEAN = 521.4
+FORCE_STD = 138.7
+
 
 class HandwritingData(TypedDict):
     strokes: torch.Tensor
@@ -58,7 +66,8 @@ class HandwritingDataset(Dataset[HandwritingData]):
     def transform(
         data: dict, max_delta: float = 10.0, y_outlier: float = 3.0
     ) -> torch.Tensor:
-        """Transform JSON data into a tensor of shape (N, 3) with [dx, dy, penState].
+        """Transform JSON data into a tensor of shape (N, 4) with
+        [dx, dy, penState, f].
 
         Uses delta-based coordinates: each point is the change from the previous point.
         penState is a **binary end-of-stroke** flag (Graves-style trailing edge):
@@ -70,6 +79,11 @@ class HandwritingDataset(Dataset[HandwritingData]):
         (see model.generate `num_strokes`). Anchoring the lift on the stroke's
         *last* point means the next step's input carries a "a stroke just ended"
         cue, letting the model condition the upcoming jump offset on it.
+
+        f is the pen tip force, **absolute** (not a delta -- force is bounded and
+        stationary, so absolute values can't drift the way accumulated deltas
+        would) and standardized by FORCE_MEAN/FORCE_STD. Dots without an `f`
+        field (early single-char recordings) get 0 = the corpus mean force.
 
         Points that would create deltas larger than max_delta are skipped (likely glitches).
         """
@@ -96,19 +110,20 @@ class HandwritingDataset(Dataset[HandwritingData]):
                     continue  # off-line spike: drop the point, keep the stroke
                 if new_stroke and abs_dots:
                     stroke_id += 1
-                abs_dots.append([dot["x"], dot["y"], stroke_id])
+                f = (dot.get("f", FORCE_MEAN) - FORCE_MEAN) / FORCE_STD
+                abs_dots.append([dot["x"], dot["y"], f, stroke_id])
                 new_stroke = False
             else:
                 new_stroke = True
 
         if not abs_dots:
-            return torch.zeros((0, 3), dtype=torch.float32)
+            return torch.zeros((0, 4), dtype=torch.float32)
 
         # Second pass: convert to deltas, filtering out large jumps. Keep stroke id.
-        dots = []  # [dx, dy, stroke_id]
+        dots = []  # [dx, dy, f, stroke_id]
         prev_x, prev_y = abs_dots[0][0], abs_dots[0][1]
 
-        for x, y, sid in abs_dots:
+        for x, y, f, sid in abs_dots:
             dx = x - prev_x
             dy = y - prev_y
 
@@ -116,20 +131,20 @@ class HandwritingDataset(Dataset[HandwritingData]):
             if abs(dx) > max_delta or abs(dy) > max_delta:
                 continue
 
-            dots.append([dx, dy, sid])
+            dots.append([dx, dy, f, sid])
             prev_x, prev_y = x, y
 
         if not dots:
-            return torch.zeros((0, 3), dtype=torch.float32)
+            return torch.zeros((0, 4), dtype=torch.float32)
 
         # Third pass: derive the binary end-of-stroke flag from stroke ids
         # (robust to the filtering above). A point is end-of-stroke (1) if it's
         # the last *kept* point of its stroke, including the final stroke.
         out = []
-        for i, (dx, dy, sid) in enumerate(dots):
+        for i, (dx, dy, f, sid) in enumerate(dots):
             is_last = i == len(dots) - 1
-            end_of_stroke = is_last or dots[i + 1][2] != sid
-            out.append([dx, dy, 1 if end_of_stroke else 0])
+            end_of_stroke = is_last or dots[i + 1][3] != sid
+            out.append([dx, dy, 1 if end_of_stroke else 0, f])
 
         return torch.tensor(out, dtype=torch.float32)
 

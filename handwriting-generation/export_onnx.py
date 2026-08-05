@@ -33,6 +33,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
+from handwriting_dataset import FORCE_MEAN, FORCE_STD
 from model import HandwritingRNN
 
 
@@ -40,9 +41,14 @@ class SingleStep(nn.Module):
     """One timestep of HandwritingRNN.generate(), trace-friendly.
 
     Shapes (B=1 always; U = number of text units, dynamic):
-        tokens: (1, U, 4) int64   x:     (1, 3) float   u:    (1, 1, U) float
+        tokens: (1, U, 4) int64   x:     (1, 4) float   u:    (1, 1, U+1) float
         mask:   (1, U)    float   hidden:(L, 1, H)      w:    (1, W)
         kappa:  (1, K)            pos:   (1, 2)
+    x is [dx, dy, penState, f] (f = absolute standardized pen force).
+    u is the character-index grid *including the phantom past-the-end position*
+    (0..U inclusive, U+1 entries), matching GRUWithSlidingAttention: the phi
+    output's last column is the phantom weight used for Graves' termination
+    test (stop when phi[U] exceeds every real character's phi).
     """
 
     def __init__(self, m: HandwritingRNN):
@@ -56,7 +62,7 @@ class SingleStep(nn.Module):
         # Absolute position: single step, so cumsum reduces to one addition.
         abs_pos = pos + x[:, :2]  # (1, 2)
         norm_pos = (abs_pos - m.pos_mean.view(1, 2)) / m.pos_std.view(1, 2)
-        aug_x = torch.cat((x, norm_pos[:, : m.abs_pos_dim]), dim=-1)  # (1, 3+P)
+        aug_x = torch.cat((x, norm_pos[:, : m.abs_pos_dim]), dim=-1)  # (1, 4+P)
 
         # Per-unit conditioning vectors (jamo concat, or symbol embedding).
         leading = m.leading_embeddings(tokens[:, :, 0])
@@ -76,8 +82,10 @@ class SingleStep(nn.Module):
         beta = torch.exp(gru.beta_head(h)).unsqueeze(-1)  # (1, K, 1)
         kappa_out = kappa + torch.exp(gru.kappa_head(h))  # (1, K)
         phi = (alpha * torch.exp(-beta * (kappa_out.unsqueeze(-1) - u) ** 2)).sum(1)
-        phi = phi * mask  # (1, U)
-        w_out = torch.bmm(phi.unsqueeze(1), c).squeeze(1)  # (1, W)
+        # (1, U+1): last column is the unmasked phantom past-the-end weight.
+        phi_real = phi[:, :-1] * mask  # (1, U)
+        w_out = torch.bmm(phi_real.unsqueeze(1), c).squeeze(1)  # (1, W)
+        phi = torch.cat([phi_real, phi[:, -1:]], dim=-1)  # masked + phantom
 
         # Higher layers: input skip + layer below + current window.
         below = h
@@ -88,7 +96,7 @@ class SingleStep(nn.Module):
             below = h
 
         out = torch.cat(new_hidden, dim=-1)  # (1, H*L) -- output skip
-        mdn_raw = m.mdn_head(out)  # (1, 6*num_mixtures)
+        mdn_raw = m.mdn_head(out)  # (1, 8*num_mixtures)
         pen_logit = m.pen_head(out)  # (1, 1)
         hidden_out = torch.stack(new_hidden, dim=0)  # (L, 1, H)
 
@@ -97,7 +105,7 @@ class SingleStep(nn.Module):
 
 def load_model(args) -> HandwritingRNN:
     model = HandwritingRNN(
-        input_size=3,
+        input_size=4,
         hidden_size=args.hidden_size,
         num_layers=args.num_layers,
         dropout=0.0,
@@ -114,8 +122,8 @@ def example_inputs(model: HandwritingRNN, num_layers: int, U: int = 5):
     hidden_size = model.gru.hidden_size
     return (
         torch.randint(0, 5, (1, U, 4), dtype=torch.int64),
-        torch.zeros(1, 3),
-        torch.arange(U, dtype=torch.float32).view(1, 1, U),
+        torch.zeros(1, 4),
+        torch.arange(U + 1, dtype=torch.float32).view(1, 1, U + 1),
         torch.ones(1, U),
         torch.zeros(num_layers, 1, hidden_size),
         torch.zeros(1, model.gru.window_dim),
@@ -152,9 +160,9 @@ def main():
             output_names=output_names,
             dynamic_axes={
                 "tokens": {1: "U"},
-                "u": {2: "U"},
+                "u": {2: "U1"},  # U+1 entries: real indices + phantom
                 "mask": {1: "U"},
-                "phi": {1: "U"},
+                "phi": {1: "U1"},
             },
             opset_version=17,
             # The dynamo exporter trips over the dynamic-U GRUCell graph; the
@@ -173,6 +181,14 @@ def main():
         "windowDim": model.gru.window_dim,
         "slidingWindowK": model.gru.sliding_window_k,
         "absPosDim": model.abs_pos_dim,
+        # x is [dx, dy, penState, f]; f is standardized by these constants
+        # (de-standardize sampled pressure with f * forceStd + forceMean).
+        "inputSize": 4,
+        "forceMean": FORCE_MEAN,
+        "forceStd": FORCE_STD,
+        # The u input takes U+1 indices (0..U); phi's last column is the
+        # phantom past-the-end weight for Graves' termination test.
+        "phantomPhi": True,
     }
     (out_dir / "model-meta.json").write_text(json.dumps(meta, indent=2) + "\n")
 

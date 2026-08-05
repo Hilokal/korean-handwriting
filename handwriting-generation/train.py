@@ -18,32 +18,44 @@ def mdn_loss(
     target: torch.Tensor,
     mask: torch.Tensor,
 ) -> torch.Tensor:
-    """Negative log-likelihood of `target` under a mixture of bivariate Gaussians.
+    """Negative log-likelihood of `target` = (dx, dy, f) under the mixture.
 
-    Shapes: pi_logits (B,S,K), mu (B,S,K,2), log_sigma (B,S,K,2), rho (B,S,K),
-    target (B,S,2) [true dx,dy], mask (B,S) bool (True = real, not padding).
+    Each component is a bivariate Gaussian over (dx, dy) (correlation rho) times
+    an independent univariate Gaussian over the pressure f. Sharing the mixture
+    weight makes pressure *mode-dependent* -- the component that turns the corner
+    can carry a lighter pressure mean than the one that goes straight -- without
+    a full 3x3 covariance.
+
+    Shapes: pi_logits (B,S,K), mu (B,S,K,3), log_sigma (B,S,K,3), rho (B,S,K),
+    target (B,S,3) [true dx, dy, f], mask (B,S) bool (True = real, not padding).
 
     Computed in log-space (logsumexp) so tight Gaussians / far targets don't
     underflow to log(0) = -inf.
     """
     x = target[..., 0:1]  # (B,S,1) -> broadcasts over K
     y = target[..., 1:2]
-    mu_x, mu_y = mu[..., 0], mu[..., 1]  # (B,S,K)
-    log_sx, log_sy = log_sigma[..., 0], log_sigma[..., 1]
+    f = target[..., 2:3]
+    mu_x, mu_y, mu_f = mu[..., 0], mu[..., 1], mu[..., 2]  # (B,S,K)
+    log_sx, log_sy, log_sf = log_sigma[..., 0], log_sigma[..., 1], log_sigma[..., 2]
     sig_x, sig_y = log_sx.exp(), log_sy.exp()
 
     nx = (x - mu_x) / sig_x  # standardized residuals (B,S,K)
     ny = (y - mu_y) / sig_y
+    nf = (f - mu_f) / log_sf.exp()
     z = nx**2 + ny**2 - 2 * rho * nx * ny
     omr2 = torch.clamp(1 - rho**2, min=1e-6)  # 1 - rho^2
 
-    # log of each component's bivariate-normal density
+    # log of each component's density: bivariate normal over (dx, dy) plus an
+    # independent univariate normal over f (log densities add).
     log_n = (
         -z / (2 * omr2)
         - math.log(2 * math.pi)
         - log_sx
         - log_sy
         - 0.5 * torch.log(omr2)
+        - 0.5 * nf**2
+        - log_sf
+        - 0.5 * math.log(2 * math.pi)
     )  # (B,S,K)
 
     log_pi = torch.log_softmax(pi_logits, dim=-1)  # (B,S,K)
@@ -101,8 +113,11 @@ def compute_losses(
         < lengths.to(inputs.device)[:, None]
     )  # (B, S)
 
-    # MDN negative log-likelihood over (dx, dy)
-    xy_loss = mdn_loss(pi_logits, mu, log_sigma, rho, targets[:, :, :2], mask)
+    # MDN negative log-likelihood over (dx, dy, f). The stroke tensor is
+    # [dx, dy, penState, f], so reorder to the (dx, dy, f) the loss expects.
+    xy_loss = mdn_loss(
+        pi_logits, mu, log_sigma, rho, targets[:, :, [0, 1, 3]], mask
+    )
 
     # Binary end-of-stroke loss (masked BCE; pen_criterion has reduction='none')
     pen_bce = pen_criterion(pen_out.squeeze(-1), targets[:, :, 2])  # (B, S)
@@ -279,7 +294,7 @@ def main():
 
     # Model
     model = HandwritingRNN(
-        input_size=3,
+        input_size=4,
         hidden_size=hidden_size,
         num_layers=num_layers,
         dropout=dropout,
