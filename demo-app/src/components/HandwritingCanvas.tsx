@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Dot } from "../lib/generator";
+import { pressureWidthFactor } from "../lib/strokes";
 
 // Live pen view. Points stream into `store.dots` (a mutable ref shared with
 // App) while generation runs; this component reveals them at pen speed with
@@ -50,11 +51,11 @@ export default function HandwritingCanvas({
         minY = 0,
         maxX = 0,
         maxY = 0;
-      const pts: { x: number; y: number; pen: number }[] = [];
+      const pts: { x: number; y: number; pen: number; f: number }[] = [];
       for (let i = 0; i < dots.length; i++) {
         x += dots[i].x;
         y += dots[i].y;
-        if (i < reveal) pts.push({ x, y, pen: dots[i].penState });
+        if (i < reveal) pts.push({ x, y, pen: dots[i].penState, f: dots[i].f });
         if (x < minX) minX = x;
         if (y < minY) minY = y;
         if (x > maxX) maxX = x;
@@ -72,20 +73,31 @@ export default function HandwritingCanvas({
       // Pen tip ~7% of line height (see animatedSvg.ts); width-relative
       // sizing over-inks long lines.
       const strokeWidth = Math.max((maxY - minY) * 0.07, spanX * 0.008);
+      // One path per stroke so each stroke carries its own pressure width
+      // (mean force of its points — matches animatedSvg.ts).
       const parts: string[] = [];
       let d = "";
-      let newStroke = true;
-      for (const p of pts) {
-        d += `${newStroke ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)} `;
-        newStroke = p.pen >= 0.5;
-      }
-      if (d) {
+      let fSum = 0;
+      let fN = 0;
+      const flush = () => {
+        if (!d) return;
+        const sw = strokeWidth * (fN ? fSum / fN : 1);
         parts.push(
           `<path d="${d}" fill="none" stroke="currentColor" ` +
-            `stroke-width="${strokeWidth.toFixed(3)}" ` +
+            `stroke-width="${sw.toFixed(3)}" ` +
             `stroke-linecap="round" stroke-linejoin="round"/>`,
         );
+        d = "";
+        fSum = 0;
+        fN = 0;
+      };
+      for (const p of pts) {
+        d += `${d ? "L" : "M"} ${p.x.toFixed(2)} ${p.y.toFixed(2)} `;
+        fSum += pressureWidthFactor(p.f);
+        fN++;
+        if (p.pen >= 0.5) flush();
       }
+      flush();
       svg.innerHTML = parts.join("");
 
       if (!doneRef.current && dots.length > 0 && reveal >= dots.length) {

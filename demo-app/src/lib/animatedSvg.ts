@@ -8,7 +8,13 @@
 // would paint a phantom dot at every not-yet-drawn stroke's start.
 
 import { Dot } from "./generator";
-import { bounds, splitStrokes, strokeLength, toAbsolute } from "./strokes";
+import {
+  bounds,
+  splitStrokes,
+  strokeLength,
+  strokeWidthFactor,
+  toAbsolute,
+} from "./strokes";
 
 export interface AnimatedSvgOptions {
   secondsPerPoint?: number;
@@ -44,10 +50,6 @@ export function toAnimatedSvg(dots: Dot[], opts: AnimatedSvgOptions = {}): strin
     strokeGap * Math.max(strokes.length - 1, 0) +
     endPause;
 
-  const common =
-    `fill="none" stroke="${color}" stroke-width="${strokeWidth.toFixed(3)}" ` +
-    'stroke-linecap="round" stroke-linejoin="round"';
-
   const els: string[] = [];
   let t = 0;
   strokes.forEach((s, i) => {
@@ -56,13 +58,20 @@ export function toAnimatedSvg(dots: Dot[], opts: AnimatedSvgOptions = {}): strin
     const end = ((t + draw) / total).toFixed(4);
     t += draw + strokeGap;
     const length = strokeLength(s);
+    // Pressure: each stroke is drawn at its mean force's width (the dash-based
+    // draw-on needs one width per path; within-stroke taper would need a
+    // ribbon fill that can't dash-animate).
+    const sw = strokeWidth * strokeWidthFactor(s);
+    const common =
+      `fill="none" stroke="${color}" stroke-width="${sw.toFixed(3)}" ` +
+      'stroke-linecap="round" stroke-linejoin="round"';
 
     if (length < 1e-6) {
       // Single-point stroke (a dot): pop it in at its moment via opacity.
       const p = s[0];
       els.push(
         `<circle cx="${p.x.toFixed(2)}" cy="${p.y.toFixed(2)}" ` +
-          `r="${(strokeWidth * 0.6).toFixed(3)}" fill="${color}" opacity="0">` +
+          `r="${(sw * 0.6).toFixed(3)}" fill="${color}" opacity="0">` +
           `<animate attributeName="opacity" dur="${total.toFixed(3)}s" ` +
           `repeatCount="indefinite" values="0;0;1;1" ` +
           `keyTimes="0;${start};${end};1" calcMode="linear"/></circle>`,
@@ -73,8 +82,8 @@ export function toAnimatedSvg(dots: Dot[], opts: AnimatedSvgOptions = {}): strin
     const d = s
       .map((p, j) => `${j === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`)
       .join(" ");
-    const gap = length + 2 * strokeWidth;
-    const hidden = length + strokeWidth;
+    const gap = length + 2 * sw;
+    const hidden = length + sw;
     els.push(
       `<path d="${d}" ${common} ` +
         `stroke-dasharray="${length.toFixed(3)} ${gap.toFixed(3)}" ` +

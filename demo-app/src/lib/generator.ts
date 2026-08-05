@@ -19,6 +19,10 @@ export interface ModelMeta {
   windowDim: number;
   slidingWindowK: number;
   absPosDim: number;
+  inputSize: number; // 4: [dx, dy, penState, f]
+  forceMean: number; // pen-force standardization (frozen; see training CLAUDE.md)
+  forceStd: number;
+  phantomPhi: boolean; // u grid is U+1 long; phi's last column = past-the-end
 }
 
 export interface GenParams {
@@ -33,6 +37,7 @@ export interface Dot {
   x: number; // dx (delta-encoded, like generated.json)
   y: number; // dy
   penState: 0 | 1; // 1 = last point of a stroke
+  f: number; // pen force, raw sensor units (same scale as the recordings)
 }
 
 const MAX_LEN_PER_CHAR = 120; // ~58 points/char in training data; generous cap
@@ -83,10 +88,12 @@ export class HandwritingModel {
       BigInt64Array.from(rows.flat().map(BigInt)),
       [1, U, 4],
     );
+    // U+1 indices: the last is the phantom past-the-end position whose phi
+    // weight drives Graves' termination test (matches model.generate()).
     const u = new ort.Tensor(
       "float32",
-      Float32Array.from({ length: U }, (_, i) => i),
-      [1, 1, U],
+      Float32Array.from({ length: U + 1 }, (_, i) => i),
+      [1, 1, U + 1],
     );
     const mask = new ort.Tensor(
       "float32",
@@ -98,7 +105,8 @@ export class HandwritingModel {
       tokens,
       u,
       mask,
-      x: new ort.Tensor("float32", new Float32Array([0, 0, 0]), [1, 3]),
+      // [dx, dy, penState, f]; f = 0 is the corpus-mean force, standardized.
+      x: new ort.Tensor("float32", new Float32Array([0, 0, 0, 0]), [1, 4]),
       hidden: new ort.Tensor(
         "float32",
         new Float32Array(meta.numLayers * meta.hiddenSize),
@@ -115,9 +123,22 @@ export class HandwritingModel {
       pos: new ort.Tensor("float32", new Float32Array(2), [1, 2]),
     };
 
+    let prevPen: 0 | 1 = 0;
     for (let step = 0; step < maxLen; step++) {
       if (signal?.aborted) return;
       const out = await this.session.run(feeds);
+
+      // --- termination (Graves' phi test, mirrors model.generate()) ---
+      // This run consumed the previously yielded dot; if that dot ended a
+      // stroke and the window now weights the phantom past-the-end position
+      // more than any real character, the text is finished. Checking before
+      // sampling keeps the timing identical to the Python loop.
+      if (prevPen === 1 && U > 1) {
+        const phi = out.phi.data as Float32Array; // (1, U+1)
+        let maxReal = -Infinity;
+        for (let i = 0; i < U; i++) if (phi[i] > maxReal) maxReal = phi[i];
+        if (phi[U] > maxReal) return;
+      }
 
       // --- end-of-stroke: greedy at temperature 0, else Bernoulli ---
       const penLogit = (out.pen_logit.data as Float32Array)[0];
@@ -128,8 +149,11 @@ export class HandwritingModel {
         pen = rng.uniform() < sigmoid(penLogit / params.temperature) ? 1 : 0;
       }
 
-      // --- offset (dx, dy): sample the mixture, with Graves' bias ---
-      // mdn_raw layout: [pi_logits(K), mu(2K), log_sigma(2K), rho_raw(K)]
+      // --- offset (dx, dy) + pressure f: sample the mixture, with Graves' bias ---
+      // mdn_raw layout: [pi_logits(K), mu(3K), log_sigma(3K), rho_raw(K)];
+      // per component mu/sigma are (dx, dy, f) triples. f is the next point's
+      // ABSOLUTE standardized force (not a delta); it shares the component
+      // pick k with the offset, so pressure is mode-dependent.
       const raw = out.mdn_raw.data as Float32Array;
       let maxLogit = -Infinity;
       for (let k = 0; k < K; k++) {
@@ -148,38 +172,46 @@ export class HandwritingModel {
         pick -= pi[k];
         if (pick <= 0) break;
       }
-      const mx = raw[K + 2 * k];
-      const my = raw[K + 2 * k + 1];
-      const sx = Math.exp(raw[3 * K + 2 * k] - params.bias);
-      const sy = Math.exp(raw[3 * K + 2 * k + 1] - params.bias);
-      const r = Math.tanh(raw[5 * K + k]);
+      const mx = raw[K + 3 * k];
+      const my = raw[K + 3 * k + 1];
+      const mf = raw[K + 3 * k + 2];
+      const sx = Math.exp(raw[4 * K + 3 * k] - params.bias);
+      const sy = Math.exp(raw[4 * K + 3 * k + 1] - params.bias);
+      const sf = Math.exp(raw[4 * K + 3 * k + 2] - params.bias);
+      const r = Math.tanh(raw[7 * K + k]);
 
-      // Bivariate normal via the Cholesky factor of the covariance.
+      // Bivariate normal via the Cholesky factor of the covariance; pressure
+      // is independent within the component. Clamp f to ~the data range so
+      // the fed-back input stays in-distribution (matches model.generate()).
       const z1 = rng.normal();
       const z2 = rng.normal();
+      const z3 = rng.normal();
       const dx = mx + sx * z1;
       const dy = my + r * sy * z1 + sy * Math.sqrt(1 - r * r) * z2;
+      const fStd = Math.min(3, Math.max(-3, mf + sf * z3));
 
-      yield { x: dx, y: dy, penState: pen };
+      yield {
+        x: dx,
+        y: dy,
+        penState: pen,
+        f: meta.forceMean + fStd * meta.forceStd,
+      };
+      prevPen = pen;
 
       feeds = {
         tokens,
         u,
         mask,
-        x: new ort.Tensor("float32", new Float32Array([dx, dy, pen]), [1, 3]),
+        x: new ort.Tensor(
+          "float32",
+          new Float32Array([dx, dy, pen, fStd]),
+          [1, 4],
+        ),
         hidden: out.hidden_out as ort.Tensor,
         w: out.w_out as ort.Tensor,
         kappa: out.kappa_out as ort.Tensor,
         pos: out.pos_out as ort.Tensor,
       };
-
-      // Terminate once the attention window slides past the last character
-      // (model.generate()'s kappa test; used here for every U since the modal
-      // stroke-count table isn't available in the browser).
-      const kap = out.kappa_out.data as Float32Array;
-      let kmean = 0;
-      for (let i = 0; i < kap.length; i++) kmean += kap[i];
-      if (kmean / kap.length >= U) return;
 
       if (step % YIELD_EVERY === YIELD_EVERY - 1) {
         await new Promise((resolve) => setTimeout(resolve, 0));

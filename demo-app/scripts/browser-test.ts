@@ -30,19 +30,37 @@ try {
   );
   console.log("model loaded");
 
-  // Generate from the default text.
+  // Generate from the default text. The canvas draws one path per stroke
+  // (per-stroke pressure width), so measure the total across paths.
   await page.click("button.primary");
+  const totalPathLen = () =>
+    Array.from(document.querySelectorAll(".pen-canvas path")).reduce(
+      (s, p) => s + (p.getAttribute("d")?.length ?? 0),
+      0,
+    );
   await page.waitForFunction(
-    () => {
-      const d = document.querySelector(".pen-canvas path")?.getAttribute("d");
-      return d && d.length > 500;
-    },
+    `(${totalPathLen.toString()})() > 500`,
     { timeout: 20000 },
   );
   const pathLen = await page.evaluate(
-    () => document.querySelector(".pen-canvas path")!.getAttribute("d")!.length,
+    `(${totalPathLen.toString()})()`,
   );
-  console.log(`strokes drawing (path d length so far: ${pathLen})`);
+  console.log(`strokes drawing (total path d length so far: ${pathLen})`);
+
+  // Pressure rendering: stroke widths must actually vary across strokes.
+  const widths = await page.evaluate(() =>
+    Array.from(
+      new Set(
+        Array.from(document.querySelectorAll(".pen-canvas path")).map((p) =>
+          p.getAttribute("stroke-width"),
+        ),
+      ),
+    ),
+  );
+  if (widths.length < 2) {
+    throw new Error(`expected varied pressure widths, got ${widths.join(",")}`);
+  }
+  console.log(`pressure widths vary (${widths.length} distinct values)`);
 
   // Wait for generation to finish (points count appears in status line).
   await page.waitForFunction(

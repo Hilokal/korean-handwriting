@@ -8,6 +8,28 @@ export interface Pt {
   x: number;
   y: number;
   pen: number;
+  f: number; // pen force, raw sensor units
+}
+
+// Pen-force standardization constants — the frozen convention shared with the
+// training pipeline (handwriting_dataset.py FORCE_MEAN/FORCE_STD). Used only
+// to map force to a width factor; do not recompute per export.
+export const FORCE_MEAN = 521.4;
+export const FORCE_STD = 138.7;
+
+/** Pressure -> stroke-width multiplier around the nominal width. Linear in
+ * standardized force, clamped so outliers can't produce absurd strokes. */
+export function pressureWidthFactor(fRaw: number): number {
+  const z = (fRaw - FORCE_MEAN) / FORCE_STD;
+  return Math.min(1.9, Math.max(0.35, 1 + 0.4 * z));
+}
+
+/** Mean width factor over one stroke's points. */
+export function strokeWidthFactor(stroke: Pt[]): number {
+  if (stroke.length === 0) return 1;
+  let s = 0;
+  for (const p of stroke) s += pressureWidthFactor(p.f);
+  return s / stroke.length;
 }
 
 /** Deltas -> absolute points (origin at the running position's start). */
@@ -17,7 +39,7 @@ export function toAbsolute(dots: Dot[]): Pt[] {
   return dots.map((d) => {
     x += d.x;
     y += d.y;
-    return { x, y, pen: d.penState };
+    return { x, y, pen: d.penState, f: d.f ?? FORCE_MEAN };
   });
 }
 

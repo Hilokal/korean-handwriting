@@ -41,8 +41,8 @@ async function run(text: string, seed: number, temperature: number, bias: number
   );
   const u = new ort.Tensor(
     "float32",
-    Float32Array.from({ length: U }, (_, i) => i),
-    [1, 1, U],
+    Float32Array.from({ length: U + 1 }, (_, i) => i),
+    [1, 1, U + 1],
   );
   const mask = new ort.Tensor("float32", new Float32Array(U).fill(1), [1, U]);
 
@@ -50,7 +50,7 @@ async function run(text: string, seed: number, temperature: number, bias: number
     tokens,
     u,
     mask,
-    x: new ort.Tensor("float32", new Float32Array([0, 0, 0]), [1, 3]),
+    x: new ort.Tensor("float32", new Float32Array([0, 0, 0, 0]), [1, 4]),
     hidden: new ort.Tensor(
       "float32",
       new Float32Array(meta.numLayers * meta.hiddenSize),
@@ -66,8 +66,18 @@ async function run(text: string, seed: number, temperature: number, bias: number
 
   const dots: Dot[] = [];
   const t0 = performance.now();
+  let prevPen: 0 | 1 = 0;
   for (let step = 0; step < U * 120 + 500; step++) {
     const out = await session.run(feeds);
+
+    // Graves' phi termination (see generator.ts): the phantom past-the-end
+    // column outweighs every real character, checked at stroke boundaries.
+    if (prevPen === 1 && U > 1) {
+      const phi = out.phi.data as Float32Array;
+      let maxReal = -Infinity;
+      for (let i = 0; i < U; i++) maxReal = Math.max(maxReal, phi[i]);
+      if (phi[U] > maxReal) break;
+    }
 
     const penLogit = (out.pen_logit.data as Float32Array)[0];
     const sig = 1 / (1 + Math.exp(-penLogit / (temperature || 1)));
@@ -95,33 +105,42 @@ async function run(text: string, seed: number, temperature: number, bias: number
       pick -= pi[k];
       if (pick <= 0) break;
     }
-    const mx = raw[K + 2 * k];
-    const my = raw[K + 2 * k + 1];
-    const sx = Math.exp(raw[3 * K + 2 * k] - bias);
-    const sy = Math.exp(raw[3 * K + 2 * k + 1] - bias);
-    const r = Math.tanh(raw[5 * K + k]);
+    const mx = raw[K + 3 * k];
+    const my = raw[K + 3 * k + 1];
+    const mf = raw[K + 3 * k + 2];
+    const sx = Math.exp(raw[4 * K + 3 * k] - bias);
+    const sy = Math.exp(raw[4 * K + 3 * k + 1] - bias);
+    const sf = Math.exp(raw[4 * K + 3 * k + 2] - bias);
+    const r = Math.tanh(raw[7 * K + k]);
     const z1 = rng.normal();
     const z2 = rng.normal();
+    const z3 = rng.normal();
     const dx = mx + sx * z1;
     const dy = my + r * sy * z1 + sy * Math.sqrt(1 - r * r) * z2;
+    const fStd = Math.min(3, Math.max(-3, mf + sf * z3));
 
-    dots.push({ x: dx, y: dy, penState: pen });
+    dots.push({
+      x: dx,
+      y: dy,
+      penState: pen,
+      f: meta.forceMean + fStd * meta.forceStd,
+    });
+    prevPen = pen;
 
     feeds = {
       tokens,
       u,
       mask,
-      x: new ort.Tensor("float32", new Float32Array([dx, dy, pen]), [1, 3]),
+      x: new ort.Tensor(
+        "float32",
+        new Float32Array([dx, dy, pen, fStd]),
+        [1, 4],
+      ),
       hidden: out.hidden_out as ort.Tensor,
       w: out.w_out as ort.Tensor,
       kappa: out.kappa_out as ort.Tensor,
       pos: out.pos_out as ort.Tensor,
     };
-
-    const kap = out.kappa_out.data as Float32Array;
-    let kmean = 0;
-    for (const v of kap) kmean += v;
-    if (kmean / kap.length >= U) break;
   }
   const ms = performance.now() - t0;
 
@@ -139,6 +158,27 @@ async function run(text: string, seed: number, temperature: number, bias: number
 
   if (dots.length < U * 10) throw new Error("suspiciously few points");
   if (strokes < U) throw new Error("suspiciously few strokes");
+
+  // Pressure sanity: finite, plausible range, and tapering into stroke ends
+  // (the signature the model learned from real hands).
+  if (!dots.every((d) => Number.isFinite(d.f))) throw new Error("non-finite f");
+  const lastF: number[] = [];
+  const midF: number[] = [];
+  let cur: Dot[] = [];
+  for (const d of dots) {
+    cur.push(d);
+    if (d.penState === 1) {
+      if (cur.length > 3) {
+        lastF.push(cur[cur.length - 1].f);
+        midF.push(cur[Math.floor(cur.length / 2)].f);
+      }
+      cur = [];
+    }
+  }
+  const mean = (a: number[]) => a.reduce((s, v) => s + v, 0) / (a.length || 1);
+  console.log(
+    `  force mid->last of stroke: ${mean(midF).toFixed(0)} -> ${mean(lastF).toFixed(0)}`,
+  );
 
   return dots;
 }
