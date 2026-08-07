@@ -117,6 +117,12 @@ const migrations: string[] = [
   );
   CREATE INDEX idx_demo_feedback_status ON demo_feedback(status);
   `,
+  // 5: status sits after dots_json in the recordings row, so any query that
+  // filters on it has to read through each row's stroke blob. A covering index
+  // lets the admin per-user counts run without touching the table at all.
+  `
+  CREATE INDEX idx_recordings_user_status ON recordings(user_id, status);
+  `,
 ];
 
 export function migrate(): void {
