@@ -123,6 +123,11 @@ const migrations: string[] = [
   `
   CREATE INDEX idx_recordings_user_status ON recordings(user_id, status);
   `,
+  // 6: the per-assignment submitted count runs on every /work/next and submit;
+  // without an index it scans the whole recordings table.
+  `
+  CREATE INDEX idx_recordings_assignment ON recordings(assignment_id);
+  `,
 ];
 
 export function migrate(): void {
