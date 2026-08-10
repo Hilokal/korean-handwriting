@@ -13,7 +13,8 @@ own; only training ties the drift to the actual A->B stroke transition).
 """
 
 import torch
-from handwriting_dataset import HandwritingData, HandwritingDataset
+from handwriting_dataset import HandwritingData, HandwritingDataset, append_tail
+from tokenizer import EOT_SYMBOL_ID
 from torch.utils.data import Dataset
 
 
@@ -42,7 +43,10 @@ def concat_samples(
 
     for s in samples:
         strokes = s["strokes"]
-        tokens.append(s["tokens"][0])  # (3,) -- single-char tokens are (1, 3)
+        # Single-char tokens are (2, 4): the character plus the EOT unit that
+        # tokenize() appends. Take only the character row; one EOT for the
+        # whole stitched line is appended below.
+        tokens.append(s["tokens"][0])
 
         cum = torch.cumsum(strokes[:, :2], dim=0)  # (N, 2) positions rel. to glyph
         gx_min = cum[:, 0].min()
@@ -65,9 +69,13 @@ def concat_samples(
         out.append([x - px, y - py, pen, f])
         px, py = x, y
 
+    # Match the real-line convention: EOT unit + parked-pen tail, so this
+    # smoke-test set exercises the trained-termination path too.
+    tokens.append(torch.tensor([0, 0, 0, EOT_SYMBOL_ID], dtype=torch.long))
+
     return {
-        "strokes": torch.tensor(out, dtype=torch.float32),
-        "tokens": torch.stack(tokens),  # (U, 3)
+        "strokes": append_tail(torch.tensor(out, dtype=torch.float32)),
+        "tokens": torch.stack(tokens),  # (U, 4), last row = EOT
     }
 
 

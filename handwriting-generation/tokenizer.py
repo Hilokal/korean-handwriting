@@ -10,7 +10,13 @@ TrailingCount = 28
 # a Hangul syllable, use the three jamo slots"; >= 1 = one of these symbol ids.
 SYMBOLS = [" ", ".", ",", "!", "?"]
 UNKNOWN_SYMBOL_ID = len(SYMBOLS) + 1  # any character not listed above
-SymbolCount = len(SYMBOLS) + 2  # embedding rows: id 0 (Hangul, unused) .. UNKNOWN
+# End-of-text unit, appended by tokenize() after the last real character. Gives
+# the attention window a *trained* position to slide onto when the writing is
+# done (paired with the parked-pen tail in handwriting_dataset.append_tail);
+# generation stops when the window's peak reaches it. Without it, everything
+# past the last character is a regime the window never saw in training.
+EOT_SYMBOL_ID = len(SYMBOLS) + 2
+SymbolCount = len(SYMBOLS) + 3  # embedding rows: id 0 (Hangul, unused) .. EOT
 
 
 def _symbol_id(ch: str) -> int:
@@ -46,6 +52,10 @@ def tokenize(input_string: str) -> torch.Tensor:
     and punctuation get jamo slots 0 and a symbol id >= 1 (see SYMBOLS). Anything
     else maps to the unknown-symbol id rather than raising, so unexpected
     characters in real transcripts don't crash the loader.
+
+    The last unit is always the EOT token (see EOT_SYMBOL_ID), so U counts one
+    unit per input character *plus one*. Appending it here (not in the datasets)
+    keeps training and inference conditioning identical by construction.
     """
     SyllableBase = 0xAC00
     SyllableCount = LeadingCount * VowelCount * TrailingCount
@@ -57,4 +67,5 @@ def tokenize(input_string: str) -> torch.Tensor:
             tokens.append([leading, vowel, trailing, 0])
         else:
             tokens.append([0, 0, 0, _symbol_id(ch)])
+    tokens.append([0, 0, 0, EOT_SYMBOL_ID])
     return torch.LongTensor(tokens)  # Shape: (U, 4)

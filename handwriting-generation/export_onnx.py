@@ -35,6 +35,7 @@ import torch.nn as nn
 
 from handwriting_dataset import FORCE_MEAN, FORCE_STD
 from model import HandwritingRNN
+from tokenizer import EOT_SYMBOL_ID
 
 
 class SingleStep(nn.Module):
@@ -189,6 +190,11 @@ def main():
         # The u input takes U+1 indices (0..U); phi's last column is the
         # phantom past-the-end weight for Graves' termination test.
         "phantomPhi": True,
+        # The tokenizer appends an EOT unit (this symbol id) after the last
+        # real character; generator.ts must do the same, and should stop at a
+        # stroke boundary once argmax(phi[:U]) reaches the EOT unit (phantom
+        # phi test as backstop). Checkpoints trained before EOT don't have it.
+        "eotSymbolId": EOT_SYMBOL_ID,
     }
     (out_dir / "model-meta.json").write_text(json.dumps(meta, indent=2) + "\n")
 

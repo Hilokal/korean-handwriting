@@ -22,7 +22,7 @@ pressure.
 
 | File | Role |
 |------|------|
-| `tokenizer.py` | `tokenize(text)` → `(U, 4)` Long tensor, one row per unit: `[leading, vowel, trailing, symbol]`. Hangul syllables decompose into the three jamo (symbol `0`); space/`.`/`,`/`!`/`?` use jamo `0` and a symbol id ≥ 1; unknown chars map to the unknown-symbol id (never raises). `decompose_hangul_syllable` is the standard Unicode algorithm (`trailingIndex == 0` = no 받침). |
+| `tokenizer.py` | `tokenize(text)` → `(U, 4)` Long tensor, one row per unit: `[leading, vowel, trailing, symbol]`. Hangul syllables decompose into the three jamo (symbol `0`); space/`.`/`,`/`!`/`?` use jamo `0` and a symbol id ≥ 1; unknown chars map to the unknown-symbol id (never raises). The last row is always the **EOT unit** (`EOT_SYMBOL_ID`, appended by `tokenize` itself so training and inference can't drift), so `U` = characters + 1 — see progress #12. `decompose_hangul_syllable` is the standard Unicode algorithm (`trailingIndex == 0` = no 받침). |
 | `handwriting_dataset.py` | `HandwritingDataset` loads the single-char folders `../data/<character>/*.json` (the `characters` list). `ExportDataset` loads the production export `../data/export/recordings/**/*.json` — real multi-character lines, transcript in `metadata.text`. Both yield `{strokes: (N,4), tokens: (U,4)}` — `[dx, dy, penState, f]` per point. `FORCE_MEAN`/`FORCE_STD` standardize the pen force (frozen constants; see Data). `transform()` (a staticmethod) converts dots → deltas. `split_by_text()` holds out whole sentences for the val set. |
 | `synthetic_dataset.py` | `concat_samples()` stitches single-char recordings into synthetic multi-char "lines" (left-to-right, gap ∝ glyph width); `SyntheticMultiCharDataset` builds a set with mixed U. Exercises the attention window before real line data is available. |
 | `model.py` | `HandwritingRNN`: jamo + symbol embeddings → `GRUWithSlidingAttention` (custom `GRUCell` loop with the Graves window) + an **MDN** head over `(dx, dy, f)` and a **binary** end-of-stroke head. Holds `mdn_params()` and `generate()` for autoregressive sampling. |
@@ -83,6 +83,15 @@ pressure.
     Pressure drops sharply before a lift (~604 stroke-start / ~516 mid /
     ~251 last point), so as an *input* it is also a physical end-of-stroke
     precursor for the pen head.
+  - **Parked-pen tail** (`append_tail`, `TAIL_LEN=8`, `TAIL_FORCE=-3.0`): every
+    `ExportDataset` (and synthetic) line gets 8 synthetic points appended after
+    its last real point — `[0, 0, penState=1, f=-3.0]` — the only supervised
+    timesteps *past the end of the writing*. Paired with the tokenizer's EOT
+    unit they make termination trainable (see progress #12); the force floor
+    (real corpus min ~-2.3) is what lets `generate()` trim parked points off
+    the output. The single-char `HandwritingDataset` does **not** get tails
+    (it would inflate `modal_stroke_counts()`; that legacy path terminates by
+    stroke count).
 
 ## Token scheme
 
@@ -97,6 +106,10 @@ pressure.
   own conditioning token so their strokes attend to a real window position instead
   of bleeding into a neighbouring jamo's embedding. (Graves treated space and
   punctuation as characters too.)
+- **EOT:** `tokenize()` always appends one final unit `[0, 0, 0, EOT_SYMBOL_ID]`
+  — a *trained* end-of-text position for the window to slide onto when the
+  writing is done (its gradient comes from the parked-pen tail; see progress
+  #12). So `U` = input characters + 1 everywhere.
 
 In `model.py`, Hangul units are conditioned on `concat(leading, vowel, trailing
 embeddings)` (9-dim); symbol units on a `symbol_embeddings` table emitting the
@@ -167,10 +180,11 @@ and the GRU layer-0 input width is 15 (`4` pen dims `[dx, dy, penState, f]` +
 
 - `pen_head` is a **binary** end-of-stroke head (sigmoid), factorized from the
   offset (read independently from the same hidden state), like Graves'
-  end-of-stroke Bernoulli. Termination is *not* a learned end-of-sequence class:
-  at generation it stops after a fixed stroke count (`modal_stroke_counts()`,
-  per single character) or — for multi-character strings — when the window slides
-  past the last character.
+  end-of-stroke Bernoulli. Termination is *not* a learned end-of-sequence
+  class: at generation it stops after a fixed stroke count
+  (`modal_stroke_counts()`, per single character) or — for multi-character
+  strings — when the attention window's peak reaches the trained EOT unit
+  (phantom-phi test as backstop; see progress #12).
 - The lift flag is **trailing-edge** (`1` = stroke's last point) so it precedes
   and conditions the next jump. This representation change (no new inputs) fixed
   the "vowel slashes through the ㅇ" jumps and gave proper ㅇ-left/ㅏ-right
@@ -449,6 +463,38 @@ Fixes landed, in order:
     the live site — the RNG stream gained a third normal draw per step; the
     stored modelVersion field is what flags them as old.
 
+12. **Trained termination: EOT unit + parked-pen tail (2026-08-10, landed —
+    retrain pending).** The phi test (#10) fixed *when* to cut, but firing
+    still requires the window to slide a full position past the last character
+    — a regime with **zero training data** (every training line ends at its
+    last real pen point), so kappa stalls there and the steps before the cut
+    are extrapolated garbage (the "stops late / garbage strokes" report,
+    2026-08-10). Sampling-side threshold tuning was rejected as per-checkpoint
+    fragile (the #7 late / #9 early lesson). Instead termination is now
+    *trained*: `tokenize()` appends an **EOT unit** (`EOT_SYMBOL_ID`, real
+    trained embedding, so `U` = chars + 1) and every training line gets a
+    **parked-pen tail** (`append_tail`: `TAIL_LEN=8` points of
+    `[0, 0, penState=1, f=TAIL_FORCE=-3.0]`) in the full loss. The tail is the
+    gradient source: to predict park-vs-write the model must know it's past
+    the text, and only the window carries that — pulling kappa onto EOT and
+    teaching the MDN a quiet park mode. Precedent: sketch-rnn (Ha & Eck 2017
+    §3.2) pads sequences with `(0,0,0,0,1)` end points ("easily learn[s] when
+    it should stop drawing"); unlike sketch-rnn the tail stays in the offset
+    loss too, since our stop reads attention, not a trained end class — the
+    drawn output must go quiet even if the stop fires late. `generate()` now
+    stops at a stroke boundary when `argmax(phi[:U]) == U-1` (peak on EOT —
+    fires earlier and never truncates a multi-stroke final syllable, since
+    EOT owns no strokes) with the phantom-phi test kept as backstop, then
+    trims trailing parked points by force (`f < -2.5`; every real point,
+    including final-period dots, sits above ~-2.3). Verified pre-retrain:
+    EOT embedding receives gradient through the tail, loss finite on real
+    batches, both generate paths run, ONNX export + `PARITY OK` on a
+    random-init checkpoint; `model-meta.json` gained `eotSymbolId`.
+    **`SymbolCount` 7→8 breaks all prior checkpoints** (see Checkpoints).
+    After retrain: judge end-of-line behavior on renders across seeds, then
+    port to `demo-app` (tokenizer must append EOT + same stop rule) and
+    re-export.
+
 **Still open:**
 - **Within-stroke taper in the animated download SVG** — the live canvas now
   renders filled ribbons with per-point width (`strokes.ts strokeRibbonPath`,
@@ -456,9 +502,11 @@ Fixes landed, in order:
   animated SVG keeps per-stroke mean widths: its draw-on is a
   `stroke-dasharray` trick that only works on stroked paths. A static
   (non-animated) download variant with ribbons would close the gap.
-- **End-of-line overrun on the 2026-08-05 checkpoint** (see progress #7):
-  tune the window-termination threshold, verify across seeds, then promote +
-  re-export ONNX for the demo.
+- **Post-EOT retrain** (progress #12): retrain on the export, judge line
+  endings on renders across seeds, promote, then port EOT + the new stop rule
+  to `demo-app/src/lib/generator.ts` (+ its tokenizer) and re-export ONNX.
+  This supersedes the old "tune the window-termination threshold" item
+  (progress #7) — threshold tuning was rejected as per-checkpoint fragile.
 - Does absolute position fix the horizontal compression? (The reason for #6; judge
   on the rendered w/h ratio, not just loss.) Requires a fresh run — the input width
   changed, so old checkpoints do not load.
@@ -491,6 +539,11 @@ connections (see the ~1.05 predictability ceiling in the progress log).
   `best_model.emb8.pt` (the bundled model) and `best_model.new.pt` do not load
   either. Inference does **not** work out of the box until the first
   post-pressure retrain lands and is committed.
+- **The EOT change (progress #12) breaks ALL prior checkpoints again** —
+  `SymbolCount` grew 7→8, so `symbol_embeddings` no longer matches and
+  `best_model.pressure.pt` (the bundled model) does not load. Inference does
+  **not** work out of the box until the first post-EOT retrain lands and is
+  promoted. (The live demo is unaffected — it runs its own exported ONNX.)
 - `best_model.pt` — overwritten by the current (window + multi-char) training run.
 - `best_model.new.pt` — the 2026-08-05 retrain on 954 lines (local only,
   gitignored; log in `train-2026-08-05.log`). Better letterforms than the

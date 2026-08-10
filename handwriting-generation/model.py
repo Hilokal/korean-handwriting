@@ -207,9 +207,11 @@ class HandwritingRNN(nn.Module):
             bias: MDN sampling bias (Graves). Higher = tighter sigma + sharper
                   mixture = cleaner/less varied strokes; 0 = unbiased.
             num_strokes: If set, stop after this many strokes are drawn (the
-                  character's expected stroke count). This is how the drawing
-                  terminates — there is no learned end-of-sequence signal. If
-                  None, generate until max_len.
+                  character's expected stroke count; the legacy single-char
+                  path). If None, terminate via the attention window: stop at
+                  a stroke boundary once its peak reaches the trained EOT
+                  unit (or the phantom past-the-end phi wins -- the backstop),
+                  with max_len as the hard limit.
             device: Device to run on
 
         Returns:
@@ -277,25 +279,39 @@ class HandwritingRNN(nn.Module):
                     tokens, next_point, token_mask, state
                 )
 
-                # Multi-character termination: Graves' phi-based test -- stop
-                # once the window puts more weight on the phantom position one
-                # past the text (phi's last column) than on any real character.
-                # This reads the attention itself, unlike the old
-                # kappa.mean() >= U heuristic, which depended on how a given
-                # checkpoint happened to arrange its kappa components (one
-                # checkpoint fired late, the next early). Deferred until the
-                # current stroke ends so the cut never leaves a dangling
-                # partial stroke; max_len remains the backstop. Used only when
-                # stroke-count termination isn't requested (single-char
-                # inference passes num_strokes, so this branch is skipped).
+                # Multi-character termination, reading the attention (unlike
+                # the old kappa.mean() >= U heuristic, which read kappa's
+                # internal component layout and fired late on one checkpoint,
+                # early on the next). Deferred until the current stroke ends so
+                # the cut never leaves a dangling partial stroke; max_len
+                # remains the backstop. Two tests, either stops:
+                #   - primary: the window's peak has reached the final unit --
+                #     the EOT token tokenize() appends -- i.e. every real
+                #     character is written and the model is in its *trained*
+                #     parked-pen regime (see handwriting_dataset.append_tail).
+                #   - backstop: Graves' phi test (the phantom past-the-end
+                #     column outweighs every real unit), which needs no trained
+                #     EOT and catches a window that overshoots it.
                 phi_t = phi[0, -1]  # (U+1,)
                 if (
                     num_strokes is None
                     and U > 1
                     and pen_state.item() == 1
-                    and phi_t[U].item() > phi_t[:U].max().item()
+                    and (
+                        phi_t[:U].argmax().item() == U - 1
+                        or phi_t[U].item() > phi_t[:U].max().item()
+                    )
                 ):
                     break
+
+        # Trim generated parked-pen points (the trained tail regime) off the
+        # end so the output stops at the last real stroke. Force alone
+        # identifies them: the tail trains f to TAIL_FORCE = -3.0, while every
+        # real point sits above ~-2.3 -- so a genuine final dot (e.g. a
+        # period's near-zero offsets) is never eaten by this.
+        start_len = start_seq.size(1)
+        while generated.size(1) > start_len and generated[0, -1, 3].item() < -2.5:
+            generated = generated[:, :-1, :]
 
         return generated
 

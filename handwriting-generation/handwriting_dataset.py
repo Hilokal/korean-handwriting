@@ -20,6 +20,36 @@ characters = ["간", "안", "아"]
 FORCE_MEAN = 521.4
 FORCE_STD = 138.7
 
+# --- Parked-pen tail (paired with the tokenizer's EOT unit) -----------------
+# Every training line gets TAIL_LEN synthetic points appended after its last
+# real point: [dx=0, dy=0, penState=1, f=TAIL_FORCE]. These are the *only*
+# supervised timesteps past the end of the writing, and they exist to make
+# termination trainable: to predict "park" instead of "keep writing" the model
+# must know it is past the text, and the only input carrying that is the
+# attention window -- so the tail's gradient pulls kappa onto the EOT unit and
+# teaches the MDN a quiet park mode (zero offset, floor force) conditioned on
+# it. Without the tail, the window's behavior past the last character is pure
+# extrapolation, which is where the post-text garbage strokes came from.
+# Precedent: sketch-rnn (Ha & Eck 2017, sec 3.2) pads every sequence with
+# (0, 0, 0, 0, 1) end points and reports the model "easily learn[s] when it
+# should stop drawing"; unlike sketch-rnn the offsets here stay in the loss,
+# because our stop test reads the attention (not a trained end class), so the
+# *drawn output* must go quiet even when the stop fires late.
+TAIL_LEN = 8
+# Parked force: raw 0 standardizes to -3.76, clamped to -3.0 -- the same bound
+# generate() clamps sampled f to, so the fed-back input stays in the sampler's
+# range. Comfortably below every real point (corpus min ~-2.3), which is what
+# lets generate() trim parked points off the output by force alone.
+TAIL_FORCE = -3.0
+
+
+def append_tail(strokes: torch.Tensor) -> torch.Tensor:
+    """Append the TAIL_LEN parked-pen points to a (N, 4) stroke tensor."""
+    tail = torch.tensor(
+        [[0.0, 0.0, 1.0, TAIL_FORCE]] * TAIL_LEN, dtype=strokes.dtype
+    )
+    return torch.cat([strokes, tail], dim=0)
+
 
 class HandwritingData(TypedDict):
     strokes: torch.Tensor
@@ -53,9 +83,11 @@ class HandwritingDataset(Dataset[HandwritingData]):
             with open(str(item["filename"]), "r") as fp:
                 strokes = self.transform(json.load(fp))
 
-            # tokens is (U, 3): one jamo triple per character. U == 1 for the
-            # current single-character folders; the attention window handles
-            # U > 1 once line-level (text, recording) data is available.
+            # tokens is (U, 4); tokenize() appends the EOT unit, so U == 2 for
+            # these single-character folders. No parked-pen tail here (unlike
+            # ExportDataset): it would inflate modal_stroke_counts(), and this
+            # legacy path terminates by stroke count, not by the window -- the
+            # EOT embedding simply gets no gradient when training on this set.
             tokens = tokenize(str(item["character"]))
             self.items.append({"strokes": strokes, "tokens": tokens})
 
@@ -204,10 +236,10 @@ class ExportDataset(Dataset[HandwritingData]):
             text = data.get("metadata", {}).get("text", "")
             if not text:
                 continue
+            # tokenize() appends the EOT unit; append_tail() the matching
+            # parked-pen points -- together they make termination trainable.
             tokens = tokenize(text)
-            if tokens.size(0) == 0:
-                continue
-            self.items.append({"strokes": strokes, "tokens": tokens})
+            self.items.append({"strokes": append_tail(strokes), "tokens": tokens})
             self.meta.append(
                 {"text": text, "sentence_id": data["metadata"].get("sentenceId")}
             )
