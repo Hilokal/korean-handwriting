@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Download all captured handwriting recordings from the production collection
-# app (your-collection-app.fly.dev) as a training-ready export.
+# app (handwriting-collection.fly.dev) as a training-ready export.
 #
 # The export is a zip of recordings/u<user>/s<sentence>/rec-<id>.json files,
 # each byte-compatible with the training pipeline AND carrying the transcript
@@ -9,13 +9,18 @@
 #
 # Usage:
 #   bash download_export.sh                 # prompts for password securely
+#   LIST_ONLY=1 bash download_export.sh     # just print per-user counts, no download
+#   USER_ID=2 bash download_export.sh       # only this worker's recordings
 #   ADMIN_PASSWORD=... bash download_export.sh   # non-interactive (avoid: lands in shell history)
 #
-# Re-run any time to pull the latest; it overwrites the previous export dir.
+# Re-run any time to pull the latest. The recordings/ dir is cleared before
+# unpacking so the export dir mirrors exactly what was pulled -- important
+# with USER_ID, or a previous unfiltered pull's other-worker files would
+# linger and ExportDataset (which globs the dir) would train on them anyway.
 set -euo pipefail
 
-BASE="${BASE:-https://your-collection-app.fly.dev}"
-ADMIN_USER="${ADMIN_USER:-admin@example.com}"
+BASE="${BASE:-https://handwriting-collection.fly.dev}"
+ADMIN_USER="${ADMIN_USER:-jon@jonb.org}"
 OUT_DIR="${OUT_DIR:-$(cd "$(dirname "$0")/.." && pwd)/data/export}"
 
 COOKIES="$(mktemp)"
@@ -44,18 +49,42 @@ if [[ "$login_code" != "200" ]]; then
 fi
 echo "Logged in as $ADMIN_USER."
 
-# --- sanity check: how many recordings will we get? ---
-count=$(curl -sS -b "$COOKIES" "$BASE/api/admin/export/manifest" \
-  | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["recordings"]))')
-echo "Recordings available for export: $count"
+# --- per-user breakdown (manifest is cheap: metadata only, no dots) ---
+curl -sS -b "$COOKIES" "$BASE/api/admin/export/manifest" | python3 -c '
+import json, sys
+from collections import Counter
+recs = json.load(sys.stdin)["recordings"]
+print(f"Recordings available for export: {len(recs)}")
+for (uid, name), n in sorted(Counter((r["userId"], r["userName"]) for r in recs).items()):
+    print(f"  userId {uid}: {name} ({n} recordings)")
+'
+
+if [[ -n "${LIST_ONLY:-}" ]]; then
+  echo "LIST_ONLY set; not downloading. Re-run with USER_ID=<id> to pull one worker."
+  exit 0
+fi
+
+# --- optional per-worker filter (the export endpoint supports ?userId=) ---
+QS=""
+if [[ -n "${USER_ID:-}" ]]; then
+  QS="?userId=${USER_ID}"
+  count=$(curl -sS -b "$COOKIES" "$BASE/api/admin/export/manifest$QS" \
+    | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["recordings"]))')
+  echo "Filtering to userId ${USER_ID}: $count recordings"
+  if [[ "$count" == "0" ]]; then
+    echo "No recordings for userId ${USER_ID}; aborting before touching $OUT_DIR." >&2
+    exit 1
+  fi
+fi
 
 # --- download the zip ---
 mkdir -p "$OUT_DIR"
 zip_path="$OUT_DIR/handwriting-export.zip"
-curl -sS -b "$COOKIES" "$BASE/api/admin/export" -o "$zip_path"
+curl -sS -b "$COOKIES" "$BASE/api/admin/export$QS" -o "$zip_path"
 echo "Downloaded: $zip_path ($(du -h "$zip_path" | cut -f1))"
 
-# --- unpack ---
+# --- unpack (clear stale recordings first so the dir mirrors this pull) ---
+rm -rf "$OUT_DIR/recordings"
 unzip -oq "$zip_path" -d "$OUT_DIR"
 rec_files=$(find "$OUT_DIR/recordings" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
 echo "Unpacked $rec_files recording files into $OUT_DIR"
