@@ -319,7 +319,16 @@ def main():
     # Training loop bookkeeping.
     best_val_loss = float("inf")
     patience_counter = 0
-    early_stop_patience = 100  # Stop if no improvement for this many epochs
+    early_stop_patience = 100  # Stop if no meaningful improvement for this many epochs
+    # A patience reset requires beating the loss at the *last reset* by this
+    # margin. Any strict new best still saves best_model.pt, but hairline
+    # (noise-level) bests no longer extend the run: the 2026-08-11 EOT retrain
+    # spent 7+ hours past epoch ~1050 buying ~0.01 nats because 0.0005-sized
+    # "improvements" kept resetting a strict comparison. Anchoring on the last
+    # reset (not the running best) keeps slow-but-real progress alive: steady
+    # gains accumulate toward the margin within the patience window.
+    early_stop_min_delta = 0.005
+    patience_anchor = float("inf")
     start_epoch = 0
 
     # RESUME=<checkpoint.pt> continues a run exactly (model + optimizer + scheduler
@@ -338,6 +347,8 @@ def main():
         start_epoch = ck["epoch"] + 1
         best_val_loss = ck["best_val_loss"]
         patience_counter = ck["patience_counter"]
+        # Older checkpoints predate the anchor; fall back to best-so-far.
+        patience_anchor = ck.get("patience_anchor", best_val_loss)
         print(
             f"Resumed from {resume_path}: epoch {start_epoch}, best val {best_val_loss:.4f}"
         )
@@ -363,10 +374,14 @@ def main():
 
         scheduler.step(val_loss)
 
+        # Save every strict new best; reset patience only on a meaningful one
+        # (see early_stop_min_delta above).
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            patience_counter = 0
             torch.save(model.state_dict(), "best_model.pt")
+        if val_loss < patience_anchor - early_stop_min_delta:
+            patience_anchor = val_loss
+            patience_counter = 0
         else:
             patience_counter += 1
 
@@ -379,6 +394,7 @@ def main():
                 "epoch": epoch,
                 "best_val_loss": best_val_loss,
                 "patience_counter": patience_counter,
+                "patience_anchor": patience_anchor,
             },
             "checkpoint.pt",
         )
