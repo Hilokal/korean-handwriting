@@ -13,10 +13,10 @@ pressure.
   `python -m venv venv && source venv/bin/activate && pip install -r requirements.txt`.
 - Device is auto-selected in this order: CUDA → Apple MPS → CPU.
 - `venv/`, checkpoints, and `../data/` are gitignored; the bundled model
-  `best_model.pressure.pt` is committed so inference works out of the box —
-  load with `NUM_LAYERS=3 EMBEDDING_SIZE=8`. (`best_model.emb8.pt` is the
-  pre-pressure bundled model, kept only as a historical artifact; it no
-  longer loads.)
+  `best_model.eot.pt` is committed so inference works out of the box —
+  load with `NUM_LAYERS=3 EMBEDDING_SIZE=8`. (`best_model.pressure.pt` and
+  `best_model.emb8.pt` are older bundled models, kept only as historical
+  artifacts; they no longer load.)
 
 ## Files
 
@@ -34,7 +34,8 @@ pressure.
 | `test_onnx_parity.py` | Two-way parity check over a 200-step stateful rollout: wrapper vs `model.forward` (catches wrapper drift) and ONNX Runtime vs wrapper (catches export bugs). Must print `PARITY OK`. |
 | `download_export.sh` | Downloads all recordings from the production collection app into `../data/export/` via the admin export endpoint. Secure password prompt; re-run to refresh. |
 | `fetch_reference_texts.py` | Fetches clean Hangul sentences from Korean Wikipedia into `../data/reference-texts/` (per-page `.txt` + `all.jsonl`, gitignored). Filters to pure-Hangul sentences and reports jamo/syllable coverage. Supports `--featured`/`--good`/`--category` bulk fetching, `--resume`, and authenticated fetching via `WIKI_USERNAME`/`WIKI_BOT_PASSWORD` env vars (bot password; anonymous requests get heavily rate-limited). |
-| `best_model.pressure.pt` | The bundled trained model (3-layer, hidden 128, embedding_size 8, pressure inputs/outputs — the 2026-08-05 retrain). Load with `NUM_LAYERS=3 EMBEDDING_SIZE=8`. Training writes new checkpoints to `best_model.pt` (gitignored). `best_model.emb8.pt` is the pre-pressure bundled model, historical only. |
+| `best_model.eot.pt` | The bundled trained model (3-layer, hidden 128, embedding_size 8, pressure + EOT/tail — the 2026-08-10 retrain on 1,463 lines). Load with `NUM_LAYERS=3 EMBEDDING_SIZE=8`. Training writes new checkpoints to `best_model.pt` (gitignored). `best_model.pressure.pt` / `best_model.emb8.pt` are older bundled models, historical only; they no longer load. |
+| `babysit_pod_training.sh` | Watches a RunPod training run; on completion (or crash) pulls `best_model.pt` + `checkpoint.pt` + the log into `runs/<date>-<pod>/`, then deletes the pod (only if the pull verifiably succeeded). Run detached under `nohup caffeinate -i` for overnight runs. |
 
 ## Data
 
@@ -495,6 +496,26 @@ Fixes landed, in order:
     port to `demo-app` (tokenizer must append EOT + same stop rule) and
     re-export.
 
+13. **EOT retrain + hangul.ink ship (2026-08-11).** Retrained on 1,463
+    single-worker lines (u2/조영우; the per-worker export filter's first use),
+    RunPod 4090/Ryzen, ~25.6s/epoch: manually stopped at epoch ~2323 (15h,
+    ~$11) after a long noise tail — best val −4.6870 @ epoch 2290, pen 0.227
+    (comparable to the pressure run despite the tails' extra lift flags). The
+    tail motivated the anchor-based `early_stop_min_delta` (see train.py).
+    **Acceptance renders pass:** seeds 42/7/99 of "아름다운 문자입니다" all
+    legible, self-terminating at 335–354 pts, clean endings, no trailing
+    garbage, final multi-stroke syllable complete — the EOT+tail design
+    (progress #12) works. Promoted as `best_model.eot.pt` (bundled), ONNX
+    re-export PARITY OK, shipped to hangul.ink (model version
+    `a67270bf0b7a`): `tokenizer.ts` appends EOT, `generator.ts` stops when
+    argmax(phi) reaches EOT (phantom backstop) and buffers parked dots
+    (streaming form of the force trim); smoke + browser tests green. Also
+    fixed a CDN staleness footgun: `model-meta.json`/`.onnx` keep stable
+    filenames, so the loader now cache-busts the meta fetch and keys the onnx
+    URL by `meta.version` (a stale-meta/fresh-onnx pair was observed live).
+    Old feedback records' (seed, modelVersion) again don't regenerate — RNG
+    stream unchanged this time, but weights/tokens differ.
+
 **Still open:**
 - **Within-stroke taper in the animated download SVG** — the live canvas now
   renders filled ribbons with per-point width (`strokes.ts strokeRibbonPath`,
@@ -502,11 +523,13 @@ Fixes landed, in order:
   animated SVG keeps per-stroke mean widths: its draw-on is a
   `stroke-dasharray` trick that only works on stroked paths. A static
   (non-animated) download variant with ribbons would close the gap.
-- **Post-EOT retrain** (progress #12): retrain on the export, judge line
-  endings on renders across seeds, promote, then port EOT + the new stop rule
-  to `demo-app/src/lib/generator.ts` (+ its tokenizer) and re-export ONNX.
-  This supersedes the old "tune the window-termination threshold" item
-  (progress #7) — threshold tuning was rejected as per-checkpoint fragile.
+- **Capacity A/B in flight (2026-08-11):** `HIDDEN_SIZE=256` (1.19M params,
+  3.4×) training on the same pod, 1,512 lines — epoch time ~25s, *unchanged*
+  from hidden-128, confirming the launch-bound profile makes width nearly
+  free. Motivated by the h128 run's underfit signals (train loss still
+  improving at epoch 1900+, train/val in lockstep). Load its checkpoints
+  with `HIDDEN_SIZE=256`. Watch for first-ever overfitting; Graves' weight
+  noise is the planned response.
 - Does absolute position fix the horizontal compression? (The reason for #6; judge
   on the rendered w/h ratio, not just loss.) Requires a fresh run — the input width
   changed, so old checkpoints do not load.
@@ -549,9 +572,13 @@ connections (see the ~1.05 predictability ceiling in the progress log).
   gitignored; log in `train-2026-08-05.log`). Better letterforms than the
   bundled model but not promoted pending the end-of-line-overrun fix
   (progress #7). Predates pressure; no longer loads.
-- `best_model.pressure.pt` — **the bundled model** (committed): the
-  2026-08-05 evening pressure retrain, promoted after the phi-termination fix
-  and the hangul.ink ship (progress #8-#11). Load with
-  `NUM_LAYERS=3 EMBEDDING_SIZE=8`. Pen loss 0.227, legible lines, pressure
-  taper, clean line endings. Local extras (gitignored): resumable full state
-  in `checkpoint-pressure.pt`, log in `train-pressure.log`.
+- `best_model.pressure.pt` — the 2026-08-05 evening pressure retrain,
+  bundled until the EOT change (progress #12) grew `SymbolCount` 7→8; **no
+  longer loads**, historical only. Local extras (gitignored): resumable full
+  state in `checkpoint-pressure.pt`, log in `train-pressure.log`.
+- `best_model.eot.pt` — **the bundled model** (committed): the 2026-08-10
+  EOT retrain (progress #13), promoted after acceptance renders + the
+  hangul.ink ship. Load with `NUM_LAYERS=3 EMBEDDING_SIZE=8`. Best val
+  −4.6870, pen 0.227, clean self-terminating line endings. Run artifacts
+  (resumable checkpoint, log, test renders) in `runs/2026-08-10-eot-retrain/`
+  (gitignored).

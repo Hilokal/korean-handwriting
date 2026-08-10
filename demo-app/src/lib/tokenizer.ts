@@ -3,7 +3,9 @@
 // tokenize(text) -> one [leading, vowel, trailing, symbol] row per unit.
 // Hangul syllables decompose into their three jamo (symbol 0); space and
 // punctuation get jamo slots 0 and a symbol id >= 1; anything else maps to the
-// unknown-symbol id rather than throwing.
+// unknown-symbol id rather than throwing. The last row is always the EOT unit
+// (trained end-of-text position; generation stops when the window's peak
+// reaches it), so U = characters + 1.
 
 export const LeadingCount = 19;
 export const VowelCount = 21;
@@ -11,6 +13,7 @@ export const TrailingCount = 28;
 
 const SYMBOLS = [" ", ".", ",", "!", "?"];
 const UNKNOWN_SYMBOL_ID = SYMBOLS.length + 1;
+export const EOT_SYMBOL_ID = SYMBOLS.length + 2;
 
 const SyllableBase = 0xac00;
 const SyllableCount = LeadingCount * VowelCount * TrailingCount;
@@ -37,5 +40,6 @@ export function tokenize(text: string): TokenRow[] {
       rows.push([0, 0, 0, s >= 0 ? s + 1 : UNKNOWN_SYMBOL_ID]);
     }
   }
+  rows.push([0, 0, 0, EOT_SYMBOL_ID]);
   return rows;
 }

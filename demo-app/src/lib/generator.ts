@@ -23,6 +23,7 @@ export interface ModelMeta {
   forceMean: number; // pen-force standardization (frozen; see training CLAUDE.md)
   forceStd: number;
   phantomPhi: boolean; // u grid is U+1 long; phi's last column = past-the-end
+  eotSymbolId: number; // tokenizer appends this trained end-of-text unit
 }
 
 export interface GenParams {
@@ -43,6 +44,11 @@ export interface Dot {
 const MAX_LEN_PER_CHAR = 120; // ~58 points/char in training data; generous cap
 const MAX_LEN_FLOOR = 500;
 const YIELD_EVERY = 8; // macrotask break so the UI stays at 60fps
+// The trained parked-pen tail sits at standardized force -3.0; every real
+// point is above ~-2.3. Dots below this are the model parking after the text:
+// buffer them instead of yielding, so they vanish if generation ends there
+// (the streaming equivalent of model.generate()'s trailing-force trim).
+const PARKED_F_STD = -2.5;
 
 function sigmoid(v: number): number {
   return 1 / (1 + Math.exp(-v));
@@ -60,14 +66,19 @@ export class HandwritingModel {
     // resolve into /public — an external (absolute) URL bypasses that.
     ort.env.wasm.wasmPaths = new URL(`${baseUrl}/ort/`, location.href).href;
     ort.env.wasm.numThreads = 1; // single-thread wasm avoids COOP/COEP headers
-    const [meta, session] = await Promise.all([
-      fetch(`${baseUrl}/model/model-meta.json`).then(
-        (r) => r.json() as Promise<ModelMeta>,
-      ),
-      ort.InferenceSession.create(`${baseUrl}/model/handwriting-step.onnx`, {
-        executionProviders: ["wasm"],
-      }),
-    ]);
+    // model-meta.json and handwriting-step.onnx keep stable filenames across
+    // deploys, so the CDN edge can serve a stale pair after a model update
+    // (observed 2026-08-11: fresh app shell, stale meta). Bust the tiny meta
+    // fetch on every load, then key the big onnx URL by the model version it
+    // announces -- each model gets its own cache entry, and the two can never
+    // disagree.
+    const meta = (await fetch(
+      `${baseUrl}/model/model-meta.json?t=${Date.now()}`,
+    ).then((r) => r.json())) as ModelMeta;
+    const session = await ort.InferenceSession.create(
+      `${baseUrl}/model/handwriting-step.onnx?v=${meta.version}`,
+      { executionProviders: ["wasm"] },
+    );
     return new HandwritingModel(session, meta);
   }
 
@@ -78,8 +89,8 @@ export class HandwritingModel {
     const rng = new Prng(params.seed);
 
     const rows = tokenize(params.text);
-    const U = rows.length;
-    if (U === 0) return;
+    const U = rows.length; // characters + the EOT unit tokenize() appends
+    if (U <= 1) return; // only the EOT row: empty text
     const maxLen =
       params.maxLen ?? Math.max(MAX_LEN_FLOOR, U * MAX_LEN_PER_CHAR);
 
@@ -124,20 +135,28 @@ export class HandwritingModel {
     };
 
     let prevPen: 0 | 1 = 0;
+    const parked: Dot[] = []; // see PARKED_F_STD
     for (let step = 0; step < maxLen; step++) {
       if (signal?.aborted) return;
       const out = await this.session.run(feeds);
 
-      // --- termination (Graves' phi test, mirrors model.generate()) ---
+      // --- termination (attention-based, mirrors model.generate()) ---
       // This run consumed the previously yielded dot; if that dot ended a
-      // stroke and the window now weights the phantom past-the-end position
-      // more than any real character, the text is finished. Checking before
-      // sampling keeps the timing identical to the Python loop.
+      // stroke, the text is finished when either (a) the window's peak sits
+      // on the final unit -- the trained EOT token, which owns no strokes, so
+      // this can't truncate a multi-stroke final syllable -- or (b) the
+      // phantom past-the-end phi outweighs every real unit (backstop).
+      // Checking before sampling keeps the timing identical to the Python loop.
       if (prevPen === 1 && U > 1) {
         const phi = out.phi.data as Float32Array; // (1, U+1)
         let maxReal = -Infinity;
-        for (let i = 0; i < U; i++) if (phi[i] > maxReal) maxReal = phi[i];
-        if (phi[U] > maxReal) return;
+        let argmax = 0;
+        for (let i = 0; i < U; i++)
+          if (phi[i] > maxReal) {
+            maxReal = phi[i];
+            argmax = i;
+          }
+        if (argmax === U - 1 || phi[U] > maxReal) return;
       }
 
       // --- end-of-stroke: greedy at temperature 0, else Bernoulli ---
@@ -190,12 +209,20 @@ export class HandwritingModel {
       const dy = my + r * sy * z1 + sy * Math.sqrt(1 - r * r) * z2;
       const fStd = Math.min(3, Math.max(-3, mf + sf * z3));
 
-      yield {
+      const dot: Dot = {
         x: dx,
         y: dy,
         penState: pen,
         f: meta.forceMean + fStd * meta.forceStd,
       };
+      // Parked dots are still fed back to the model (feeds below use dx/dy/
+      // pen/fStd regardless) -- buffering only affects what gets displayed.
+      if (fStd < PARKED_F_STD) {
+        parked.push(dot);
+      } else {
+        yield* parked.splice(0);
+        yield dot;
+      }
       prevPen = pen;
 
       feeds = {

@@ -1,6 +1,6 @@
 {
-  "version": "295f9cca8059",
-  "checkpoint": "best_model.pressure.pt",
+  "version": "a67270bf0b7a",
+  "checkpoint": "best_model.eot.pt",
   "hiddenSize": 128,
   "numLayers": 3,
   "embeddingSize": 8,
@@ -11,5 +11,6 @@
   "inputSize": 4,
   "forceMean": 521.4,
   "forceStd": 138.7,
-  "phantomPhi": true
+  "phantomPhi": true,
+  "eotSymbolId": 7
 }
