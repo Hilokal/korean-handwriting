@@ -75,6 +75,32 @@ export function getOrAssignNext(userId: number): Assignment | null {
     }
   }
 
+  // Curated batches jump the queue: any active priority > 0 sentence this
+  // user hasn't finished (or skipped/reported) is served before the
+  // coverage-driven pool -- highest priority tier first, best coverage gain
+  // within the tier. Coverage targeting alone would bury curated sentences
+  // whose syllables are already well covered, which is exactly the case for
+  // register-gap batches like the 해요체 set (common syllables, rare position).
+  const prioRows = db
+    .prepare(
+      `SELECT id, priority FROM sentences
+       WHERE active = 1 AND priority > 0
+         AND id NOT IN (
+           SELECT sentence_id FROM assignments
+           WHERE user_id = ? AND status IN ('completed','skipped','reported'))
+       ORDER BY priority DESC
+       LIMIT ${CANDIDATE_LIMIT}`,
+    )
+    .all(userId) as Array<{ id: number; priority: number }>;
+  if (prioRows.length > 0) {
+    const topTier = prioRows.filter((r) => r.priority === prioRows[0].priority);
+    const best = pickByCoverage(
+      userId,
+      topTier.map((r) => r.id),
+    );
+    if (best !== null) return createAssignment(userId, best);
+  }
+
   // This user's least-covered syllables (never-recorded count as 0).
   const targets = db
     .prepare(
@@ -118,6 +144,17 @@ export function getOrAssignNext(userId: number): Assignment | null {
   }
   if (candidates.length === 0) return null;
 
+  const best = pickByCoverage(userId, candidates);
+  if (best === null) return null;
+  return createAssignment(userId, best);
+}
+
+/** Among candidate sentence ids, the one with the best coverage gain for this
+ *  user. score = Σ occurrences/(1+count), normalized by sqrt(length) so wholly
+ *  under-covered sentences win without always favoring the longest ones. */
+function pickByCoverage(userId: number, candidates: number[]): number | null {
+  if (candidates.length === 0) return null;
+
   // Score in JS with the user's full coverage map (≤ ~1500 rows).
   const counts = new Map<string, number>(
     (
@@ -138,8 +175,6 @@ export function getOrAssignNext(userId: number): Assignment | null {
     occurrences: number;
   }>;
 
-  // score = Σ occurrences/(1+count), normalized by sqrt(length) so wholly
-  // under-covered sentences win without always favoring the longest ones.
   const scores = new Map<number, { gain: number; length: number }>();
   for (const row of rows) {
     const entry = scores.get(row.sentence_id) ?? { gain: 0, length: 0 };
@@ -156,13 +191,18 @@ export function getOrAssignNext(userId: number): Assignment | null {
       best = sentenceId;
     }
   }
+  return best;
+}
 
+function createAssignment(userId: number, sentenceId: number): Assignment {
   const text = (
-    db.prepare("SELECT text FROM sentences WHERE id = ?").get(best) as { text: string }
+    db.prepare("SELECT text FROM sentences WHERE id = ?").get(sentenceId) as {
+      text: string;
+    }
   ).text;
   const chunks = chunkText(text, CHUNK_MAX_CHARS);
   const assignmentId = db
     .prepare("INSERT INTO assignments (user_id, sentence_id, chunks) VALUES (?, ?, ?)")
-    .run(userId, best, JSON.stringify(chunks)).lastInsertRowid as number;
-  return { assignmentId, sentenceId: best!, text, chunks, nextChunkIndex: 0 };
+    .run(userId, sentenceId, JSON.stringify(chunks)).lastInsertRowid as number;
+  return { assignmentId, sentenceId, text, chunks, nextChunkIndex: 0 };
 }

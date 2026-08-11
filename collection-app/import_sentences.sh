@@ -6,6 +6,11 @@
 #
 # Usage:
 #   bash import_sentences.sh curated/haeyo-2026-08.jsonl
+#   PRIORITY=1 bash import_sentences.sh curated/haeyo-2026-08.jsonl
+#
+# PRIORITY=N stamps every row (rows with their own "priority" keep it):
+# priority > 0 sentences are assigned to workers before the coverage-driven
+# pool. Re-posting an already-imported file with PRIORITY set promotes it.
 set -euo pipefail
 
 FILE="${1:?usage: import_sentences.sh <sentences.jsonl>}"
@@ -47,8 +52,12 @@ fi
 echo "Logged in as $ADMIN_USER."
 
 python3 -c '
-import json, sys
+import json, os, sys
 rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+p = os.environ.get("PRIORITY")
+if p is not None:
+    for r in rows:
+        r.setdefault("priority", int(p))
 print(json.dumps({"sentences": rows}))
 ' "$FILE" | curl -sS -b "$COOKIES" \
   -H 'Content-Type: application/json' \

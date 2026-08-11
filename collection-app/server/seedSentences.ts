@@ -34,26 +34,39 @@ export function seedSentences(): void {
 /**
  * Bulk-insert sentences into the pool with their syllable index (the
  * assignment queue reads sentence_syllables, so a sentence without index rows
- * would never be assigned). Duplicate texts are skipped -- re-importing a
- * seed file is idempotent. Shared by first-boot seeding and the admin
- * /sentences/import route (curated batches, e.g. curated/haeyo-2026-08.jsonl).
+ * would never be assigned). priority > 0 makes the assignment queue serve a
+ * sentence ahead of the coverage-driven pool (see assignment.ts). Texts that
+ * already exist are not re-inserted; if the import carries a priority, it is
+ * applied to the existing row -- so re-posting a seed file with a priority
+ * promotes an already-imported batch. Shared by first-boot seeding and the
+ * admin /sentences/import route (e.g. curated/haeyo-2026-08.jsonl).
  */
 export function importSentences(
-  rows: { text: string; source?: string | null }[],
-): { inserted: number; skipped: number } {
+  rows: { text: string; source?: string | null; priority?: number }[],
+): { inserted: number; updated: number; skipped: number } {
   const insertSentence = db.prepare(
-    "INSERT OR IGNORE INTO sentences (text, source) VALUES (?, ?)",
+    "INSERT OR IGNORE INTO sentences (text, source, priority) VALUES (?, ?, ?)",
   );
   const insertSyllable = db.prepare(
     "INSERT INTO sentence_syllables (syllable, sentence_id, occurrences) VALUES (?, ?, ?)",
   );
+  const updatePriority = db.prepare(
+    "UPDATE sentences SET priority = ? WHERE text = ? AND priority != ?",
+  );
   let inserted = 0;
+  let updated = 0;
   db.transaction(() => {
-    for (const { text, source } of rows) {
+    for (const { text, source, priority } of rows) {
       const trimmed = text?.trim();
       if (!trimmed) continue;
-      const result = insertSentence.run(trimmed, source ?? null);
-      if (result.changes === 0) continue; // duplicate text
+      const result = insertSentence.run(trimmed, source ?? null, priority ?? 0);
+      if (result.changes === 0) {
+        // Existing text: only its priority (if given) can change.
+        if (priority !== undefined && updatePriority.run(priority, trimmed, priority).changes > 0) {
+          updated++;
+        }
+        continue;
+      }
       inserted++;
       const sentenceId = result.lastInsertRowid as number;
       for (const [syllable, occurrences] of syllableCounts(trimmed)) {
@@ -61,5 +74,5 @@ export function importSentences(
       }
     }
   })();
-  return { inserted, skipped: rows.length - inserted };
+  return { inserted, updated, skipped: rows.length - inserted - updated };
 }

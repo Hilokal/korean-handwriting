@@ -128,6 +128,14 @@ const migrations: string[] = [
   `
   CREATE INDEX idx_recordings_assignment ON recordings(assignment_id);
   `,
+  // 7: curated sentence batches (e.g. the 해요체 register-gap set) must reach
+  // workers ahead of the coverage-driven Wikipedia pool -- their syllables are
+  // often already well covered, so coverage scoring alone would bury them.
+  // priority > 0 sentences are assigned first (highest tier first, per-user,
+  // no repeats); 0 = the normal pool.
+  `
+  ALTER TABLE sentences ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export function migrate(): void {
