@@ -9,6 +9,16 @@
 set -euo pipefail
 
 FILE="${1:?usage: import_sentences.sh <sentences.jsonl>}"
+
+# Fill unset vars from the repo-root .env (plain KEY=value lines); explicitly
+# set environment variables win. Skips the password prompt when present.
+ENV_FILE="$(cd "$(dirname "$0")/.." && pwd)/.env"
+if [[ -f "$ENV_FILE" ]]; then
+  while IFS='=' read -r k v; do
+    [[ "$k" =~ ^[A-Z_]+$ && -z "${!k+x}" ]] && export "$k=$v"
+  done < "$ENV_FILE"
+fi
+
 BASE="${BASE:-https://handwriting-collection.fly.dev}"
 ADMIN_USER="${ADMIN_USER:-jon@jonb.org}"
 

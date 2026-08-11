@@ -8,16 +8,28 @@
 # in metadata.text -- so no dependence on folder names for the text.
 #
 # Usage:
-#   bash download_export.sh                 # prompts for password securely
+#   bash download_export.sh                 # creds/filter from the repo-root .env
+#                                           # (ADMIN_USER/ADMIN_PASSWORD/USER_ID);
+#                                           # prompts for the password if absent
 #   LIST_ONLY=1 bash download_export.sh     # just print per-user counts, no download
 #   USER_ID=2 bash download_export.sh       # only this worker's recordings
-#   ADMIN_PASSWORD=... bash download_export.sh   # non-interactive (avoid: lands in shell history)
+#   USER_ID= bash download_export.sh        # every worker (overrides the .env filter)
 #
 # Re-run any time to pull the latest. The recordings/ dir is cleared before
 # unpacking so the export dir mirrors exactly what was pulled -- important
 # with USER_ID, or a previous unfiltered pull's other-worker files would
 # linger and ExportDataset (which globs the dir) would train on them anyway.
 set -euo pipefail
+
+# Fill unset vars from the repo-root .env (plain KEY=value lines: ADMIN_USER,
+# ADMIN_PASSWORD, USER_ID, ...). Explicitly-set environment variables win, so
+# e.g. `USER_ID= bash download_export.sh` still pulls every worker.
+ENV_FILE="$(cd "$(dirname "$0")/.." && pwd)/.env"
+if [[ -f "$ENV_FILE" ]]; then
+  while IFS='=' read -r k v; do
+    [[ "$k" =~ ^[A-Z_]+$ && -z "${!k+x}" ]] && export "$k=$v"
+  done < "$ENV_FILE"
+fi
 
 BASE="${BASE:-https://handwriting-collection.fly.dev}"
 ADMIN_USER="${ADMIN_USER:-jon@jonb.org}"
