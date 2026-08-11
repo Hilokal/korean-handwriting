@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db } from "../db.js";
 import { createInvite, requireAdmin } from "../auth.js";
 import { rebuildCoverage } from "../coverage.js";
+import { importSentences } from "../seedSentences.js";
 
 export const adminRoutes = Router();
 adminRoutes.use(requireAdmin);
@@ -202,6 +203,22 @@ adminRoutes.post("/sentences/:id/activate", (req, res) => {
     .prepare("UPDATE sentences SET active = 1 WHERE id = ?")
     .run(req.params.id);
   res.json({ ok: result.changes > 0 });
+});
+
+// Bulk-add curated sentences to the pool (first-boot seeding only runs on an
+// empty DB). Body: { sentences: [{ text, source? }] }. Duplicate texts are
+// skipped, so re-posting a whole seed file is idempotent.
+adminRoutes.post("/sentences/import", (req, res) => {
+  const rows = (
+    req.body as { sentences?: { text: string; source?: string }[] } | undefined
+  )?.sentences;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    res
+      .status(400)
+      .json({ error: "body must be { sentences: [{ text, source? }] }" });
+    return;
+  }
+  res.json(importSentences(rows));
 });
 
 // --- Maintenance ---

@@ -23,29 +23,43 @@ export function seedSentences(): void {
     return;
   }
 
+  const lines = fs.readFileSync(path, "utf-8").split("\n").filter(Boolean);
+  importSentences(
+    lines.map((line) => JSON.parse(line) as { text: string; source?: string }),
+  );
+  const count = (db.prepare("SELECT COUNT(*) AS n FROM sentences").get() as { n: number }).n;
+  console.log(`seeded ${count} sentences from ${path}`);
+}
+
+/**
+ * Bulk-insert sentences into the pool with their syllable index (the
+ * assignment queue reads sentence_syllables, so a sentence without index rows
+ * would never be assigned). Duplicate texts are skipped -- re-importing a
+ * seed file is idempotent. Shared by first-boot seeding and the admin
+ * /sentences/import route (curated batches, e.g. curated/haeyo-2026-08.jsonl).
+ */
+export function importSentences(
+  rows: { text: string; source?: string | null }[],
+): { inserted: number; skipped: number } {
   const insertSentence = db.prepare(
     "INSERT OR IGNORE INTO sentences (text, source) VALUES (?, ?)",
   );
   const insertSyllable = db.prepare(
     "INSERT INTO sentence_syllables (syllable, sentence_id, occurrences) VALUES (?, ?, ?)",
   );
-
-  const lines = fs.readFileSync(path, "utf-8").split("\n").filter(Boolean);
-  const seedAll = db.transaction(() => {
-    for (const line of lines) {
-      const { text, source } = JSON.parse(line) as {
-        text: string;
-        source?: string;
-      };
-      const result = insertSentence.run(text, source ?? null);
+  let inserted = 0;
+  db.transaction(() => {
+    for (const { text, source } of rows) {
+      const trimmed = text?.trim();
+      if (!trimmed) continue;
+      const result = insertSentence.run(trimmed, source ?? null);
       if (result.changes === 0) continue; // duplicate text
+      inserted++;
       const sentenceId = result.lastInsertRowid as number;
-      for (const [syllable, occurrences] of syllableCounts(text)) {
+      for (const [syllable, occurrences] of syllableCounts(trimmed)) {
         insertSyllable.run(syllable, sentenceId, occurrences);
       }
     }
-  });
-  seedAll();
-  const count = (db.prepare("SELECT COUNT(*) AS n FROM sentences").get() as { n: number }).n;
-  console.log(`seeded ${count} sentences from ${path}`);
+  })();
+  return { inserted, skipped: rows.length - inserted };
 }
