@@ -523,13 +523,20 @@ Fixes landed, in order:
   animated SVG keeps per-stroke mean widths: its draw-on is a
   `stroke-dasharray` trick that only works on stroked paths. A static
   (non-animated) download variant with ribbons would close the gap.
-- **Capacity A/B in flight (2026-08-11):** `HIDDEN_SIZE=256` (1.19M params,
-  3.4×) training on the same pod, 1,512 lines — epoch time ~25s, *unchanged*
-  from hidden-128, confirming the launch-bound profile makes width nearly
-  free. Motivated by the h128 run's underfit signals (train loss still
-  improving at epoch 1900+, train/val in lockstep). Load its checkpoints
-  with `HIDDEN_SIZE=256`. Watch for first-ever overfitting; Graves' weight
-  noise is the planned response.
+- **Capacity A/B result (2026-08-11): unregularized width LOST.**
+  `HIDDEN_SIZE=256` (1.19M params, 3.4×) on 1,512 lines: epoch time ~25s,
+  *unchanged* from h128 (launch-bound → width is compute-free), converged
+  ~2× faster per epoch, then overfit — val stalled at **−4.5751** (epoch
+  ~300) while train ran to −4.98, pen degraded 0.22→0.27; min-delta early
+  stop ended it at epoch 401 (2h42m, ~$2). The h128 bundled model scores
+  **−4.8885** on the *same* val split (re-eval, MPS) — 0.31 nats better.
+  Verdict: ~1.2k lines can't feed 1.19M params bare; next levers are
+  regularization-with-width (raise vertical dropout above 0.1, or Graves'
+  adaptive weight noise) or more collected data. Artifacts (load with
+  `HIDDEN_SIZE=256`) in `runs/2026-08-11-h256/`, gitignored. Method note:
+  val NLL was only comparable across the runs because the h128 checkpoint
+  was re-evaluated on the new 1,512-line split — the 1,463→1,512 growth
+  reshuffled `split_by_text`, moving val by ~0.2 nats on its own.
 - Does absolute position fix the horizontal compression? (The reason for #6; judge
   on the rendered w/h ratio, not just loss.) Requires a fresh run — the input width
   changed, so old checkpoints do not load.
