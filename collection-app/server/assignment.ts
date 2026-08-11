@@ -88,8 +88,7 @@ export function getOrAssignNext(userId: number): Assignment | null {
          AND id NOT IN (
            SELECT sentence_id FROM assignments
            WHERE user_id = ? AND status IN ('completed','skipped','reported'))
-       ORDER BY priority DESC
-       LIMIT ${CANDIDATE_LIMIT}`,
+       ORDER BY priority DESC`,
     )
     .all(userId) as Array<{ id: number; priority: number }>;
   if (prioRows.length > 0) {
