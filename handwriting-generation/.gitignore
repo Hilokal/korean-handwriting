@@ -1,3 +1,6 @@
 .venv
 __pycache__
 runs/
+
+# Per-run MDN visualization trace (regenerate with viz_mdn.py)
+mdn_trace.json

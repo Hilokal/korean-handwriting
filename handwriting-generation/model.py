@@ -196,6 +196,7 @@ class HandwritingRNN(nn.Module):
         bias: float = 0.0,
         num_strokes: int | None = None,
         device: torch.device | str = "cpu",
+        trace: list | None = None,
     ):
         """Generate a handwriting sequence autoregressively.
 
@@ -213,6 +214,13 @@ class HandwritingRNN(nn.Module):
                   unit (or the phantom past-the-end phi wins -- the backstop),
                   with max_len as the hard limit.
             device: Device to run on
+            trace: If a list, one dict per generated point is appended with the
+                  step's sampling-time internals (post-bias pi/sigma, mu, rho,
+                  the sampled component k, pen probability, phi). Entry i
+                  describes the distribution point start_len + i was sampled
+                  from. Purely observational -- sampling is unchanged. Note the
+                  final parked-pen trim can leave trace longer than the
+                  returned sequence; align with trace[:len - start_len].
 
         Returns:
             Generated sequence tensor of shape (1, total_len, 4)
@@ -246,6 +254,20 @@ class HandwritingRNN(nn.Module):
                 sigma = torch.exp(log_sigma - bias)
 
                 k = torch.multinomial(pi, 1).item()  # pick a component
+
+                if trace is not None:
+                    trace.append(
+                        {
+                            "pi": pi[0].tolist(),
+                            "mu": mu[0].tolist(),  # (K, 3) means of (dx, dy, f)
+                            "sigma": sigma[0].tolist(),  # (K, 3), post-bias
+                            "rho": rho[0].tolist(),
+                            "k": k,
+                            "pen_p": torch.sigmoid(pen_logit).item(),
+                            "phi": phi[0, -1].tolist(),  # (U+1,) incl. phantom
+                        }
+                    )
+
                 mx, my, mf = mu[0, k]
                 sx, sy, sf = sigma[0, k]
                 r = rho[0, k]
