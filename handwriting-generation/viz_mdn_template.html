@@ -828,6 +828,19 @@ function play() {
   playing = true;
   lastFrame = null;
   playBtn.textContent = "Pause";
+  // Watchdog: some embeddings throttle requestAnimationFrame to zero
+  // (observed in the artifact viewer: Play toggles but no frame ever fires).
+  // If no rAF tick lands shortly after play, drive playback on a timer --
+  // events and timers still run in those environments.
+  rafTicked = false;
+  setTimeout(() => {
+    if (playing && !rafTicked && !timerDriver) {
+      timerDriver = setInterval(() => {
+        if (!playing) { clearInterval(timerDriver); timerDriver = 0; return; }
+        stepPlayback(performance.now());
+      }, 33);
+    }
+  }, 300);
 }
 function pause() { playing = false; playBtn.textContent = "Play"; }
 playBtn.addEventListener("click", () => playing ? pause() : play());
@@ -904,20 +917,26 @@ function render() {
   readout.textContent = `point ${t + 1} / ${N}`;
 }
 
+let rafTicked = false;
+let timerDriver = 0;
+
+function stepPlayback(ts) {
+  if (lastFrame === null) lastFrame = ts;
+  tFloat = Math.min(N - 1, tFloat + (ts - lastFrame) / 1000 * pps);
+  lastFrame = ts;
+  const nt = Math.floor(tFloat);
+  if (nt !== t) { t = nt; }
+  if (t >= N - 1) pause();
+  render();
+}
+
 function frame(ts) {
   // Schedule-first: if render() ever throws (one bad t is enough), the loop
   // must survive -- otherwise the Play button keeps toggling while playback
   // is permanently dead, with the only evidence buried in the console.
   requestAnimationFrame(frame);
-  if (playing) {
-    if (lastFrame === null) lastFrame = ts;
-    tFloat = Math.min(N - 1, tFloat + (ts - lastFrame) / 1000 * pps);
-    lastFrame = ts;
-    const nt = Math.floor(tFloat);
-    if (nt !== t) { t = nt; }
-    if (t >= N - 1) pause();
-    render();
-  }
+  rafTicked = true;
+  if (playing && !timerDriver) stepPlayback(ts);
 }
 
 function relayout() { sizeStage(); sizeScrub(); tFloat = t; render(); }
