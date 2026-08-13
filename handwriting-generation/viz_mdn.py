@@ -112,7 +112,15 @@ def main():
                 }
             )
         comps.sort(key=lambda c: -c["pi"])
-        steps.append({"penP": round(entry["pen_p"], 4), "comps": comps})
+        steps.append(
+            {
+                "penP": round(entry["pen_p"], 4),
+                # (U+1,) attention over units: one per character, then the EOT
+                # unit, then the phantom past-the-end column
+                "phi": [round(p, 4) for p in entry["phi"]],
+                "comps": comps,
+            }
+        )
 
     out = {
         "text": args.text,

@@ -39,6 +39,7 @@
   }
 
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body {
     margin: 0;
     background: var(--surface);
@@ -87,6 +88,35 @@
     gap: 6px 18px;
   }
   header .meta .ko { font-size: 13px; color: var(--ink); }
+
+  .att-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .att-strip {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .att-cell {
+    font-size: 21px;
+    line-height: 1;
+    padding: 7px 8px 9px;
+    border-radius: 6px;
+    color: var(--ink);
+  }
+  .att-cell.space { color: var(--muted); }
+  .att-cell.eot {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: var(--text-2);
+    padding-top: 12px;
+    padding-bottom: 13px;
+  }
+  .att-cell.peak { box-shadow: inset 0 -2.5px 0 var(--cand); }
 
   .stage-card {
     background: var(--panel);
@@ -137,6 +167,7 @@
   }
   .mix-strip .seg.sampled { background: var(--samp); }
   .mix-strip .seg.other { background: var(--track); }
+  .mix-strip .seg.cut { background: var(--track); }
   .mix-read {
     flex: none;
     white-space: nowrap;
@@ -169,7 +200,7 @@
     gap: 12px 20px;
     font-size: 13px;
   }
-  .controls button {
+  .controls > button {
     font: inherit;
     font-weight: 600;
     color: var(--ink);
@@ -180,7 +211,25 @@
     min-width: 96px;
     cursor: pointer;
   }
-  .controls button:hover { border-color: var(--muted); }
+  .controls > button:hover { border-color: var(--muted); }
+  .seg-group {
+    display: inline-flex;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .seg-btn {
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-2);
+    background: transparent;
+    border: none;
+    padding: 6px 14px;
+    cursor: pointer;
+  }
+  .seg-btn.active { background: var(--panel); color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--cand); }
+  .seg-btn:focus-visible { outline: 2px solid var(--cand); outline-offset: -2px; }
   .controls button:focus-visible,
   .controls select:focus-visible,
   .controls input:focus-visible { outline: 2px solid var(--cand); outline-offset: 2px; }
@@ -223,6 +272,12 @@
     <div class="meta" id="meta"></div>
   </header>
 
+  <div class="att-row">
+    <span class="mix-label">Reading <span style="text-transform:none">&mdash; attention &phi;</span></span>
+    <div class="att-strip" id="attStrip" role="img"
+         aria-label="Attention weight per character"></div>
+  </div>
+
   <div class="stage-card">
     <canvas id="stage"></canvas>
   </div>
@@ -243,11 +298,16 @@
         fill="none" stroke="var(--ink)" stroke-width="2.4" stroke-linecap="round"/></svg>
       written so far &mdash; width = pen pressure
     </span>
+    <span class="item" id="legendLanded">
+      <svg class="sw" width="26" height="14"><path d="M13 2.5 V11.5 M8.5 7 H17.5"
+        fill="none" stroke="var(--ink)" stroke-width="2"/></svg>
+      where the sampled move landed
+    </span>
     <span class="zoom-note" id="zoomNote"></span>
   </div>
 
   <div class="mix-row">
-    <span class="mix-label">Mixture weights &pi;</span>
+    <span class="mix-label">Mixture weights <span style="text-transform:none">&pi;</span></span>
     <div class="mix-strip" id="mixStrip" role="img" aria-label="Current mixture weights"></div>
     <span class="mix-read" id="mixRead"></span>
   </div>
@@ -270,7 +330,17 @@
         <option value="4">4&times;</option>
       </select>
     </label>
-    <label>magnify offsets
+    <label>view
+      <span class="seg-group">
+        <button type="button" id="viewLoupe" class="seg-btn active">Loupe</button>
+        <button type="button" id="viewOverlay" class="seg-btn">Overlay</button>
+      </span>
+    </label>
+    <label>components
+      <input type="range" id="topk" min="1" max="20" step="1" value="20">
+      <span id="topkVal" style="font-variant-numeric: tabular-nums;">all</span>
+    </label>
+    <label id="magGroup" hidden>magnify offsets
       <input type="range" id="mag" min="1" max="10" step="0.5" value="4">
       <span id="magVal" style="font-variant-numeric: tabular-nums;">&times;4</span>
     </label>
@@ -340,7 +410,9 @@ const bw = (maxX - minX) + 2 * PAD_X, bh = (maxY - minY) + 2 * PAD_Y;
 // ---------- state ----------
 let t = startLen;                // index of the last drawn point
 let playing = false;
+let mode = "loupe";              // "loupe" | "overlay"
 let mag = 4;
+let topK = 20;                   // show only the k heaviest components
 let lastFrame = null;
 const BASE_PPS = 30;             // points per second at 1x
 let pps = BASE_PPS;
@@ -350,9 +422,9 @@ const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 function colors() {
   const cs = getComputedStyle(document.body);
   const v = n => cs.getPropertyValue(n).trim();
-  return { surface: v("--panel"), ink: v("--ink"), cand: v("--cand"),
-           samp: v("--samp"), muted: v("--muted"), track: v("--track"),
-           line: v("--line") };
+  return { surface: v("--panel"), pageSurface: v("--surface"), ink: v("--ink"),
+           cand: v("--cand"), samp: v("--samp"), muted: v("--muted"),
+           track: v("--track"), line: v("--line") };
 }
 
 function hexA(hex, a) {
@@ -382,8 +454,12 @@ function drawStage() {
   sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   sctx.clearRect(0, 0, cssW, cssH);
 
-  const scale = Math.min(cssW / bw, cssH / bh);
-  const ox = (cssW - bw * scale) / 2 + (PAD_X - minX) * scale;
+  // In loupe mode the panel gets its own strip on the right, beside the
+  // writing, so it never occludes ink no matter where the pen is.
+  const L = loupeSize(cssH);
+  const availW = mode === "loupe" ? cssW - L - 24 : cssW;
+  const scale = Math.min(availW / bw, cssH / bh);
+  const ox = (availW - bw * scale) / 2 + (PAD_X - minX) * scale;
   const oy = (cssH - bh * scale) / 2 + (PAD_Y - minY) * scale;
   const X = x => ox + x * scale, Y = y => oy + y * scale;
 
@@ -414,36 +490,7 @@ function drawStage() {
   const pen = pts[t];
   const step = t + 1 - startLen < steps.length ? steps[t + 1 - startLen] : null;
 
-  if (step) {
-    // candidate ellipses first (back), sampled last (front)
-    const ordered = [...step.comps].sort((a, b) => a.pi - b.pi)
-      .sort((a, b) => (a.sampled ? 1 : 0) - (b.sampled ? 1 : 0));
-    for (const c of ordered) {
-      const cx = X(pen.x + mag * c.mx), cy = Y(pen.y + mag * c.my);
-      const r1 = Math.max(1.5, mag * c.r1 * scale), r2 = Math.max(1.5, mag * c.r2 * scale);
-      const col = c.sampled ? C.samp : C.cand;
-      sctx.beginPath();
-      sctx.ellipse(cx, cy, r1, r2, c.a, 0, Math.PI * 2);
-      sctx.fillStyle = hexA(col, Math.min(0.6, 0.08 + 0.65 * c.pi));
-      sctx.fill();
-      sctx.lineWidth = c.sampled ? 1.8 : 1;
-      sctx.strokeStyle = hexA(col, c.sampled ? 0.95 : Math.min(0.85, 0.22 + 0.9 * c.pi));
-      sctx.stroke();
-      // component mean
-      sctx.beginPath();
-      sctx.arc(cx, cy, c.sampled ? 2.4 : 1.6, 0, Math.PI * 2);
-      sctx.fillStyle = hexA(col, c.sampled ? 1 : Math.min(0.9, 0.3 + 0.9 * c.pi));
-      sctx.fill();
-      if (c.sampled) {
-        sctx.beginPath();
-        sctx.moveTo(X(pen.x), Y(pen.y));
-        sctx.lineTo(cx, cy);
-        sctx.lineWidth = 1;
-        sctx.strokeStyle = hexA(col, 0.55);
-        sctx.stroke();
-      }
-    }
-  }
+  if (mode === "overlay" && step) drawComponents(X(pen.x), Y(pen.y), mag * scale, step, C);
 
   // pen tip
   sctx.beginPath();
@@ -453,6 +500,202 @@ function drawStage() {
   sctx.lineWidth = 2;
   sctx.strokeStyle = C.surface;
   sctx.stroke();
+
+  if (mode === "loupe") drawLoupe(cssW, cssH, C, pen, step, X, Y, scale);
+}
+
+// The mixture at some origin: ellipse position/size = component (mu, sigma)
+// times unitScale px per data unit. Candidates back-to-front by weight,
+// sampled component on top. Respects the top-k filter (comps arrive sorted by
+// weight; the sampled component is always kept -- it's the move that
+// happened). labels=true prints each bubble's weight next to its mean.
+function drawComponents(originX, originY, unitScale, step, C, labels = false) {
+  const kept = step.comps.filter((c, i) => i < topK || c.sampled);
+  const ordered = [...kept].sort((a, b) => a.pi - b.pi)
+    .sort((a, b) => (a.sampled ? 1 : 0) - (b.sampled ? 1 : 0));
+  const labs = [];
+  for (const c of ordered) {
+    const cx = originX + c.mx * unitScale, cy = originY + c.my * unitScale;
+    const r1 = Math.max(1.5, c.r1 * unitScale), r2 = Math.max(1.5, c.r2 * unitScale);
+    const col = c.sampled ? C.samp : C.cand;
+    sctx.beginPath();
+    sctx.ellipse(cx, cy, r1, r2, c.a, 0, Math.PI * 2);
+    sctx.fillStyle = hexA(col, Math.min(0.6, 0.08 + 0.65 * c.pi));
+    sctx.fill();
+    sctx.lineWidth = c.sampled ? 1.8 : 1;
+    sctx.strokeStyle = hexA(col, c.sampled ? 0.95 : Math.min(0.85, 0.22 + 0.9 * c.pi));
+    sctx.stroke();
+    // component mean
+    sctx.beginPath();
+    sctx.arc(cx, cy, c.sampled ? 2.4 : 1.6, 0, Math.PI * 2);
+    sctx.fillStyle = hexA(col, c.sampled ? 1 : Math.min(0.9, 0.3 + 0.9 * c.pi));
+    sctx.fill();
+    if (c.sampled) {
+      sctx.beginPath();
+      sctx.moveTo(originX, originY);
+      sctx.lineTo(cx, cy);
+      sctx.lineWidth = 1;
+      sctx.strokeStyle = hexA(col, 0.55);
+      sctx.stroke();
+    }
+    if (labels && c.pi >= 0.03) labs.push({ cx, cy, c });
+  }
+
+  // Weight labels, drawn after every ellipse so text sits on top. Bubbles in a
+  // tight cluster would print on the same pixels, so collisions push a label
+  // down in 12px rows and a hairline leader keeps it tied to its mean.
+  if (labs.length) {
+    const placed = [];
+    labs.sort((a, b) => a.cy - b.cy);
+    for (const l of labs) {
+      const text = Math.round(l.c.pi * 100) + "%";
+      sctx.font = (l.c.sampled ? "600 " : "") + "10px ui-monospace, Menlo, monospace";
+      const w = sctx.measureText(text).width;
+      const x = l.cx + 6;
+      let y = l.cy - 4;
+      while (placed.some(p => Math.abs(p.y - y) < 11 && x < p.x + p.w + 6 && p.x < x + w + 6))
+        y += 12;
+      placed.push({ x, y, w });
+      if (y - (l.cy - 4) > 6) {
+        sctx.beginPath();
+        sctx.moveTo(l.cx + 1.5, l.cy + 1.5);
+        sctx.lineTo(x + 1, y - 3);
+        sctx.lineWidth = 1;
+        sctx.strokeStyle = hexA(C.ink, 0.3);
+        sctx.stroke();
+      }
+      sctx.fillStyle = hexA(C.ink, l.c.sampled ? 1 : 0.75);
+      sctx.fillText(text, x, y);
+    }
+  }
+}
+
+// Fixed-zoom magnifier of the pen tip's neighborhood: the main canvas stays
+// true-scale; only this panel is enlarged, at a constant LOUPE_Z px per data
+// unit (so its contents never rescale with the window or a slider).
+const LOUPE_Z = 350;
+const loupeSize = cssH => Math.max(200, Math.min(290, cssH - 30));
+function drawLoupe(cssW, cssH, C, pen, step, X, Y, scale) {
+  const L = loupeSize(cssH);
+  const lx = cssW - L - 10;
+  const ly = (cssH - L) / 2;
+
+  // field-of-view ring on the main canvas (the loupe's capture radius)
+  const rUnits = (L / 2) / LOUPE_Z;
+  const penX = X(pen.x), penY = Y(pen.y);
+  sctx.beginPath();
+  sctx.arc(penX, penY, rUnits * scale, 0, Math.PI * 2);
+  sctx.lineWidth = 1;
+  sctx.strokeStyle = hexA(C.muted, 0.55);
+  sctx.stroke();
+
+  const clip = () => {
+    sctx.beginPath();
+    if (sctx.roundRect) sctx.roundRect(lx, ly, L, L, 10);
+    else sctx.rect(lx, ly, L, L);
+  };
+  sctx.save();
+  clip();
+  sctx.fillStyle = C.pageSurface;
+  sctx.fill();
+  sctx.clip();
+
+  const cx = lx + L / 2, cy = ly + L / 2;
+  const mx = u => cx + u * LOUPE_Z, my = u => cy + u * LOUPE_Z;
+
+  // crosshair at the pen
+  sctx.strokeStyle = hexA(C.muted, 0.4);
+  sctx.lineWidth = 1;
+  sctx.beginPath();
+  sctx.moveTo(cx - 7, cy); sctx.lineTo(cx + 7, cy);
+  sctx.moveTo(cx, cy - 7); sctx.lineTo(cx, cy + 7);
+  sctx.stroke();
+
+  // all ink written so far, magnified -- a true magnifier view, so nearby
+  // stroke fragments appear as context (the clip crops anything far away)
+  sctx.strokeStyle = hexA(C.ink, 0.45);
+  sctx.lineWidth = 2.5;
+  sctx.lineCap = "round";
+  sctx.lineJoin = "round";
+  const fov = rUnits + 0.1;
+  sctx.beginPath();
+  for (let i = 1; i <= t; i++) {
+    if (strokeIdx[i] !== strokeIdx[i - 1]) continue;
+    const ax = pts[i - 1].x - pen.x, ay = pts[i - 1].y - pen.y;
+    const bx = pts[i].x - pen.x, by = pts[i].y - pen.y;
+    if (Math.min(Math.abs(ax), Math.abs(bx)) > fov ||
+        Math.min(Math.abs(ay), Math.abs(by)) > fov) continue;
+    sctx.moveTo(mx(ax), my(ay));
+    sctx.lineTo(mx(bx), my(by));
+  }
+  sctx.stroke();
+
+  if (step) drawComponents(cx, cy, LOUPE_Z, step, C, true);
+
+  // where the sample actually landed (the very next point)
+  if (step && t + 1 < N) {
+    const ox = mx(pts[t + 1].x - pen.x), oy = my(pts[t + 1].y - pen.y);
+    sctx.strokeStyle = C.ink;
+    sctx.lineWidth = 2;
+    sctx.beginPath();
+    sctx.moveTo(ox - 5, oy); sctx.lineTo(ox + 5, oy);
+    sctx.moveTo(ox, oy - 5); sctx.lineTo(ox, oy + 5);
+    sctx.stroke();
+  }
+
+  // scale bar: 0.2 data units
+  const bar = 0.2 * LOUPE_Z;
+  sctx.strokeStyle = hexA(C.muted, 0.9);
+  sctx.lineWidth = 1.5;
+  sctx.beginPath();
+  sctx.moveTo(lx + 12, ly + L - 12);
+  sctx.lineTo(lx + 12 + bar, ly + L - 12);
+  sctx.stroke();
+  sctx.fillStyle = C.muted;
+  sctx.font = "10px ui-monospace, Menlo, monospace";
+  sctx.fillText("0.2 units", lx + 12, ly + L - 18);
+
+  sctx.restore();
+  clip();
+  sctx.lineWidth = 1;
+  sctx.strokeStyle = C.line;
+  sctx.stroke();
+}
+
+// ---------- attention strip ----------
+// One cell per unit the window attends over: each character, then the trained
+// EOT unit. Background intensity = current phi (the phantom past-the-end
+// column stays in the data but isn't shown). Cells are built once; playback
+// only retints them.
+const attStrip = document.getElementById("attStrip");
+const attCells = [];
+{
+  const chars = [...TRACE.text];
+  for (const ch of chars) {
+    const cell = document.createElement("span");
+    cell.className = "att-cell" + (ch === " " ? " space" : "");
+    cell.textContent = ch === " " ? "␣" : ch;
+    attStrip.appendChild(cell);
+    attCells.push(cell);
+  }
+  const eot = document.createElement("span");
+  eot.className = "att-cell eot";
+  eot.textContent = "EOT";
+  attStrip.appendChild(eot);
+  attCells.push(eot);
+}
+
+function drawAtt(j) {
+  if (j < 0 || j >= steps.length) j = steps.length - 1;  // hold last frame at the end
+  const phi = steps[j].phi;
+  const C = colors();
+  let peak = 0;
+  for (let u = 1; u < attCells.length; u++) if (phi[u] > phi[peak]) peak = u;
+  for (let u = 0; u < attCells.length; u++) {
+    const a = Math.min(1, phi[u] ?? 0);
+    attCells[u].style.background = a > 0.02 ? hexA(C.cand, a * 0.5) : "transparent";
+    attCells[u].classList.toggle("peak", u === peak);
+  }
 }
 
 // ---------- mixture strip ----------
@@ -464,6 +707,7 @@ function drawStrip() {
   const j = t + 1 - startLen;
   if (j === lastStripStep) return;
   lastStripStep = j;
+  drawAtt(j);
   if (j < 0 || j >= steps.length) {
     mixStrip.innerHTML = "";
     mixRead.textContent = "finished";
@@ -474,12 +718,14 @@ function drawStrip() {
   const hidden = Math.max(0, 1 - shown);
   let html = "";
   let sampledPi = 0, topPi = 0;
-  for (const c of step.comps) {
+  step.comps.forEach((c, i) => {
     if (c.sampled) sampledPi = c.pi;
     topPi = Math.max(topPi, c.pi);
-    html += `<div class="seg${c.sampled ? " sampled" : ""}" style="flex:${c.pi.toFixed(4)}"
-      title="π = ${(c.pi * 100).toFixed(1)}%${c.sampled ? " (sampled)" : ""}"></div>`;
-  }
+    const cut = i >= topK && !c.sampled;  // hidden by the top-k filter
+    html += `<div class="seg${c.sampled ? " sampled" : cut ? " cut" : ""}"
+      style="flex:${c.pi.toFixed(4)}"
+      title="π = ${(c.pi * 100).toFixed(1)}%${c.sampled ? " (sampled)" : cut ? " (filtered out)" : ""}"></div>`;
+  });
   if (hidden > 0.004) {
     const nHidden = 20 - step.comps.length;
     html += `<div class="seg other" style="flex:${hidden.toFixed(4)}"
@@ -583,9 +829,36 @@ speedSel.addEventListener("change", () => { pps = BASE_PPS * parseFloat(speedSel
 magInput.addEventListener("input", () => {
   mag = parseFloat(magInput.value);
   magVal.textContent = "×" + mag;
-  zoomNote.textContent = `offsets & ellipses magnified ×${mag}`;
+  if (mode === "overlay") zoomNote.textContent = `offsets & ellipses magnified ×${mag}`;
   render();
 });
+
+const magGroup = document.getElementById("magGroup");
+const legendLanded = document.getElementById("legendLanded");
+function setMode(m) {
+  mode = m;
+  document.getElementById("viewLoupe").classList.toggle("active", m === "loupe");
+  document.getElementById("viewOverlay").classList.toggle("active", m === "overlay");
+  magGroup.hidden = m === "loupe";
+  legendLanded.hidden = m === "overlay";
+  zoomNote.textContent = m === "loupe"
+    ? "loupe: the pen's neighborhood at fixed zoom"
+    : `offsets & ellipses magnified ×${mag}`;
+  render();
+}
+document.getElementById("viewLoupe").addEventListener("click", () => setMode("loupe"));
+document.getElementById("viewOverlay").addEventListener("click", () => setMode("overlay"));
+
+const topkInput = document.getElementById("topk");
+const topkVal = document.getElementById("topkVal");
+function setTopK(k) {
+  topK = k;
+  topkInput.value = k;
+  topkVal.textContent = k >= 20 ? "all" : "top " + k;
+  lastStripStep = -2;  // force the strip to re-render its cut/kept classes
+  render();
+}
+topkInput.addEventListener("input", () => setTopK(parseInt(topkInput.value, 10)));
 
 document.addEventListener("keydown", e => {
   if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT") return;
@@ -630,10 +903,15 @@ function relayout() { sizeStage(); sizeScrub(); tFloat = t; render(); }
 window.addEventListener("resize", relayout);
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
 
-// deep-link a step: #t=180 opens paused at point 180 (handy mid-talk)
+// deep links: #t=180 opens paused at point 180; #view=overlay picks the view;
+// #k=3 shows only the top 3 components
 {
   const m = location.hash.match(/t=(\d+)/);
   if (m) t = tFloat = Math.min(N - 1, Math.max(startLen, parseInt(m[1], 10)));
+  const k = location.hash.match(/k=(\d+)/);
+  if (k) setTopK(Math.min(20, Math.max(1, parseInt(k[1], 10))));
+  const v = location.hash.match(/view=(loupe|overlay)/);
+  setMode(v ? v[1] : "loupe");
 }
 
 relayout();
