@@ -345,12 +345,12 @@
       <span id="magVal" style="font-variant-numeric: tabular-nums;">&times;4</span>
     </label>
     <label id="zoomGroup">loupe zoom
-      <input type="range" id="zoom" min="150" max="900" step="25" value="350">
+      <input type="range" id="zoom" min="150" max="2400" step="25" value="350">
       <span id="zoomVal" style="font-variant-numeric: tabular-nums;">&times;1.0</span>
     </label>
     <span class="readout" id="readout"></span>
   </div>
-  <div class="hint">space = play / pause &middot; &larr; &rarr; = step (shift = &times;10) &middot; click the timeline to jump to a branch point</div>
+  <div class="hint">space = play / pause &middot; &larr; &rarr; = step (shift = &times;10) &middot; click the timeline to jump to a branch point &middot; loupe: drag to pan, wheel to zoom, double-click to re-center</div>
 </div>
 
 <script>
@@ -418,6 +418,8 @@ let mode = "loupe";              // "loupe" | "overlay"
 let mag = 4;
 let topK = 20;                   // show only the k heaviest components
 let loupeZ = 350;                // loupe zoom, px per data unit
+let panX = 0, panY = 0;          // loupe viewport offset from the pen, data units
+let loupeRect = null;            // last drawn loupe geometry, for hit-testing
 let lastFrame = null;
 const BASE_PPS = 30;             // points per second at 1x
 let pps = BASE_PPS;
@@ -584,12 +586,13 @@ function drawLoupe(cssW, cssH, C, pen, step, X, Y, scale) {
   const L = loupeSize(cssH);
   const lx = cssW - L - 10;
   const ly = (cssH - L) / 2;
+  loupeRect = { lx, ly, L };
 
-  // field-of-view ring on the main canvas (the loupe's capture radius)
+  // field-of-view ring on the main canvas: where the viewport actually is
+  // (it follows the pen, offset by the pan)
   const rUnits = (L / 2) / loupeZ;
-  const penX = X(pen.x), penY = Y(pen.y);
   sctx.beginPath();
-  sctx.arc(penX, penY, rUnits * scale, 0, Math.PI * 2);
+  sctx.arc(X(pen.x + panX), Y(pen.y + panY), rUnits * scale, 0, Math.PI * 2);
   sctx.lineWidth = 1;
   sctx.strokeStyle = hexA(C.muted, 0.55);
   sctx.stroke();
@@ -606,14 +609,15 @@ function drawLoupe(cssW, cssH, C, pen, step, X, Y, scale) {
   sctx.clip();
 
   const cx = lx + L / 2, cy = ly + L / 2;
-  const mx = u => cx + u * loupeZ, my = u => cy + u * loupeZ;
+  const mx = u => cx + (u - panX) * loupeZ, my = u => cy + (u - panY) * loupeZ;
 
-  // crosshair at the pen
+  // crosshair at the pen (drifts off-panel when panned away; double-click
+  // re-centers)
   sctx.strokeStyle = hexA(C.muted, 0.4);
   sctx.lineWidth = 1;
   sctx.beginPath();
-  sctx.moveTo(cx - 7, cy); sctx.lineTo(cx + 7, cy);
-  sctx.moveTo(cx, cy - 7); sctx.lineTo(cx, cy + 7);
+  sctx.moveTo(mx(0) - 7, my(0)); sctx.lineTo(mx(0) + 7, my(0));
+  sctx.moveTo(mx(0), my(0) - 7); sctx.lineTo(mx(0), my(0) + 7);
   sctx.stroke();
 
   // all ink written so far, magnified -- a true magnifier view, so nearby
@@ -628,14 +632,14 @@ function drawLoupe(cssW, cssH, C, pen, step, X, Y, scale) {
     if (strokeIdx[i] !== strokeIdx[i - 1]) continue;
     const ax = pts[i - 1].x - pen.x, ay = pts[i - 1].y - pen.y;
     const bx = pts[i].x - pen.x, by = pts[i].y - pen.y;
-    if (Math.min(Math.abs(ax), Math.abs(bx)) > fov ||
-        Math.min(Math.abs(ay), Math.abs(by)) > fov) continue;
+    if (Math.min(Math.abs(ax - panX), Math.abs(bx - panX)) > fov ||
+        Math.min(Math.abs(ay - panY), Math.abs(by - panY)) > fov) continue;
     sctx.moveTo(mx(ax), my(ay));
     sctx.lineTo(mx(bx), my(by));
   }
   sctx.stroke();
 
-  if (step) drawComponents(cx, cy, loupeZ, step, C, true);
+  if (step) drawComponents(mx(0), my(0), loupeZ, step, C, true);
 
   // where the sample actually landed (the very next point)
   if (step && t + 1 < N) {
@@ -873,12 +877,59 @@ document.getElementById("viewOverlay").addEventListener("click", () => setMode("
 const zoomInput = document.getElementById("zoom");
 const zoomVal = document.getElementById("zoomVal");
 function setLoupeZ(z) {
-  loupeZ = z;
-  zoomInput.value = z;
-  zoomVal.textContent = "×" + (z / 350).toFixed(z % 350 === 0 ? 0 : 1);
+  loupeZ = Math.min(2400, Math.max(150, z));
+  zoomInput.value = loupeZ;
+  zoomVal.textContent = "×" + (loupeZ / 350).toFixed(loupeZ % 350 === 0 ? 0 : 1);
   render();
 }
 zoomInput.addEventListener("input", () => setLoupeZ(parseInt(zoomInput.value, 10)));
+
+// Loupe viewport: drag inside the panel to pan (offset kept relative to the
+// pen, so the view tracks it during playback), wheel to zoom, double-click to
+// snap back to the pen.
+const inLoupe = (x, y) => mode === "loupe" && loupeRect &&
+  x >= loupeRect.lx && x <= loupeRect.lx + loupeRect.L &&
+  y >= loupeRect.ly && y <= loupeRect.ly + loupeRect.L;
+const stageXY = e => {
+  const r = stage.getBoundingClientRect();
+  return [e.clientX - r.left, e.clientY - r.top];
+};
+let loupeDrag = null;
+stage.addEventListener("pointerdown", e => {
+  const [x, y] = stageXY(e);
+  if (inLoupe(x, y)) {
+    loupeDrag = { x, y };
+    stage.setPointerCapture(e.pointerId);
+    stage.style.cursor = "grabbing";
+  }
+});
+stage.addEventListener("pointermove", e => {
+  const [x, y] = stageXY(e);
+  if (loupeDrag) {
+    panX = Math.min(12, Math.max(-12, panX - (x - loupeDrag.x) / loupeZ));
+    panY = Math.min(12, Math.max(-12, panY - (y - loupeDrag.y) / loupeZ));
+    loupeDrag = { x, y };
+    render();
+  } else {
+    stage.style.cursor = inLoupe(x, y) ? "grab" : "crosshair";
+  }
+});
+stage.addEventListener("pointerup", e => {
+  loupeDrag = null;
+  const [x, y] = stageXY(e);
+  stage.style.cursor = inLoupe(x, y) ? "grab" : "crosshair";
+});
+stage.addEventListener("dblclick", e => {
+  const [x, y] = stageXY(e);
+  if (inLoupe(x, y)) { panX = panY = 0; render(); }
+});
+stage.addEventListener("wheel", e => {
+  const [x, y] = stageXY(e);
+  if (inLoupe(x, y)) {
+    e.preventDefault();
+    setLoupeZ(Math.round(loupeZ * Math.exp(-e.deltaY * 0.002)));
+  }
+}, { passive: false });
 
 const topkInput = document.getElementById("topk");
 const topkVal = document.getElementById("topkVal");
@@ -951,7 +1002,7 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
   const k = location.hash.match(/k=(\d+)/);
   if (k) setTopK(Math.min(20, Math.max(1, parseInt(k[1], 10))));
   const z = location.hash.match(/z=(\d+)/);
-  if (z) setLoupeZ(Math.min(900, Math.max(150, parseInt(z[1], 10))));
+  if (z) setLoupeZ(parseInt(z[1], 10));
   const v = location.hash.match(/view=(loupe|overlay)/);
   setMode(v ? v[1] : "loupe");
 }
