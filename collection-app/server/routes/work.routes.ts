@@ -96,8 +96,8 @@ workRoutes.post("/:id/submit", (req, res) => {
         `INSERT INTO recordings
            (user_id, sentence_id, assignment_id, chunk_index, chunk_text,
             start_time, end_time, dot_count,
-            pen_mac, page_section, page_owner, page_book, page_page, dots_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            pen_mac, page_section, page_owner, page_book, page_page)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         req.user!.id,
@@ -113,8 +113,10 @@ workRoutes.post("/:id/submit", (req, res) => {
         body.pageInfo?.owner ?? null,
         body.pageInfo?.book ?? null,
         body.pageInfo?.page ?? null,
-        JSON.stringify(body.dots),
       ).lastInsertRowid as number;
+    db.prepare(
+      "INSERT INTO recording_dots (recording_id, dots_json) VALUES (?, ?)",
+    ).run(recordingId, JSON.stringify(body.dots));
     if (isLastChunk) {
       db.prepare(
         "UPDATE assignments SET status = 'completed', resolved_at = datetime('now') WHERE id = ?",

@@ -44,10 +44,11 @@ function recordingQuery(filters: ExportFilters, withDots: boolean, afterId?: num
     `SELECT r.id, r.user_id, u.name AS user_name, r.sentence_id, s.text,
             r.chunk_index, r.chunk_text,
             r.start_time, r.end_time, r.dot_count, r.pen_mac, r.created_at
-            ${withDots ? ", r.dots_json" : ""}
+            ${withDots ? ", d.dots_json" : ""}
      FROM recordings r
      JOIN users u ON u.id = r.user_id
      JOIN sentences s ON s.id = r.sentence_id
+     ${withDots ? "JOIN recording_dots d ON d.recording_id = r.id" : ""}
      WHERE ${conditions.join(" AND ")}
      ORDER BY r.id
      ${afterId !== undefined ? `LIMIT ${EXPORT_BATCH}` : ""}`,

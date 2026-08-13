@@ -99,10 +99,11 @@ adminRoutes.get("/recordings/:id", (req, res) => {
     .prepare(
       `SELECT r.id, r.user_id, u.name AS userName, r.sentence_id,
               COALESCE(r.chunk_text, s.text) AS text, r.chunk_index,
-              r.dot_count, r.status, r.created_at, r.pen_mac, r.dots_json
+              r.dot_count, r.status, r.created_at, r.pen_mac, d.dots_json
        FROM recordings r
        JOIN users u ON u.id = r.user_id
        JOIN sentences s ON s.id = r.sentence_id
+       JOIN recording_dots d ON d.recording_id = r.id
        WHERE r.id = ?`,
     )
     .get(req.params.id) as { dots_json: string } | undefined;

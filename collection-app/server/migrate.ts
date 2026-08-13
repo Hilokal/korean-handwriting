@@ -136,6 +136,28 @@ const migrations: string[] = [
   `
   ALTER TABLE sentences ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
   `,
+  // 8: the admin users page computes MAX(created_at) per user; created_at sits
+  // after dots_json in the row, so without a covering index every recording's
+  // stroke blob gets read just to find the timestamp.
+  `
+  CREATE INDEX idx_recordings_user_created ON recordings(user_id, created_at);
+  `,
+  // 9: move the stroke blob out of recordings entirely. The blobs pushed the
+  // DB past the machine's page cache, so any query that touched a recordings
+  // row paid for the blob it skipped over (migrations 5, 6, and 8 were all
+  // symptoms). With the blob in a side table, recordings is a few dozen bytes
+  // per row and stays cached. Note: the copy briefly doubles blob bytes on
+  // disk, and DROP COLUMN frees pages to the freelist without shrinking the
+  // file — run VACUUM afterwards to reclaim the space.
+  `
+  CREATE TABLE recording_dots (
+    recording_id INTEGER PRIMARY KEY REFERENCES recordings(id),
+    dots_json TEXT NOT NULL
+  );
+  INSERT INTO recording_dots (recording_id, dots_json)
+    SELECT id, dots_json FROM recordings;
+  ALTER TABLE recordings DROP COLUMN dots_json;
+  `,
 ];
 
 export function migrate(): void {
