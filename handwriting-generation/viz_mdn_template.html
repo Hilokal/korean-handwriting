@@ -344,6 +344,10 @@
       <input type="range" id="mag" min="1" max="10" step="0.5" value="4">
       <span id="magVal" style="font-variant-numeric: tabular-nums;">&times;4</span>
     </label>
+    <label id="zoomGroup">loupe zoom
+      <input type="range" id="zoom" min="150" max="900" step="25" value="350">
+      <span id="zoomVal" style="font-variant-numeric: tabular-nums;">&times;1.0</span>
+    </label>
     <span class="readout" id="readout"></span>
   </div>
   <div class="hint">space = play / pause &middot; &larr; &rarr; = step (shift = &times;10) &middot; click the timeline to jump to a branch point</div>
@@ -413,6 +417,7 @@ let playing = false;
 let mode = "loupe";              // "loupe" | "overlay"
 let mag = 4;
 let topK = 20;                   // show only the k heaviest components
+let loupeZ = 350;                // loupe zoom, px per data unit
 let lastFrame = null;
 const BASE_PPS = 30;             // points per second at 1x
 let pps = BASE_PPS;
@@ -570,10 +575,10 @@ function drawComponents(originX, originY, unitScale, step, C, labels = false) {
   }
 }
 
-// Fixed-zoom magnifier of the pen tip's neighborhood: the main canvas stays
-// true-scale; only this panel is enlarged, at a constant LOUPE_Z px per data
-// unit (so its contents never rescale with the window or a slider).
-const LOUPE_Z = 350;
+// Magnifier of the pen tip's neighborhood: the main canvas stays true-scale;
+// only this panel is enlarged, at loupeZ px per data unit. Zoom scales
+// everything in the panel together (positions, sizes, scale bar, FOV ring),
+// so it is a real magnifier, never a coordinate distortion.
 const loupeSize = cssH => Math.max(200, Math.min(290, cssH - 30));
 function drawLoupe(cssW, cssH, C, pen, step, X, Y, scale) {
   const L = loupeSize(cssH);
@@ -581,7 +586,7 @@ function drawLoupe(cssW, cssH, C, pen, step, X, Y, scale) {
   const ly = (cssH - L) / 2;
 
   // field-of-view ring on the main canvas (the loupe's capture radius)
-  const rUnits = (L / 2) / LOUPE_Z;
+  const rUnits = (L / 2) / loupeZ;
   const penX = X(pen.x), penY = Y(pen.y);
   sctx.beginPath();
   sctx.arc(penX, penY, rUnits * scale, 0, Math.PI * 2);
@@ -601,7 +606,7 @@ function drawLoupe(cssW, cssH, C, pen, step, X, Y, scale) {
   sctx.clip();
 
   const cx = lx + L / 2, cy = ly + L / 2;
-  const mx = u => cx + u * LOUPE_Z, my = u => cy + u * LOUPE_Z;
+  const mx = u => cx + u * loupeZ, my = u => cy + u * loupeZ;
 
   // crosshair at the pen
   sctx.strokeStyle = hexA(C.muted, 0.4);
@@ -630,7 +635,7 @@ function drawLoupe(cssW, cssH, C, pen, step, X, Y, scale) {
   }
   sctx.stroke();
 
-  if (step) drawComponents(cx, cy, LOUPE_Z, step, C, true);
+  if (step) drawComponents(cx, cy, loupeZ, step, C, true);
 
   // where the sample actually landed (the very next point)
   if (step && t + 1 < N) {
@@ -643,8 +648,9 @@ function drawLoupe(cssW, cssH, C, pen, step, X, Y, scale) {
     sctx.stroke();
   }
 
-  // scale bar: 0.2 data units
-  const bar = 0.2 * LOUPE_Z;
+  // scale bar: pick the largest nice unit that stays under ~140px at this zoom
+  const barUnits = [0.5, 0.2, 0.1, 0.05].find(u => u * loupeZ <= 140) || 0.05;
+  const bar = barUnits * loupeZ;
   sctx.strokeStyle = hexA(C.muted, 0.9);
   sctx.lineWidth = 1.5;
   sctx.beginPath();
@@ -653,7 +659,7 @@ function drawLoupe(cssW, cssH, C, pen, step, X, Y, scale) {
   sctx.stroke();
   sctx.fillStyle = C.muted;
   sctx.font = "10px ui-monospace, Menlo, monospace";
-  sctx.fillText("0.2 units", lx + 12, ly + L - 18);
+  sctx.fillText(barUnits + " units", lx + 12, ly + L - 18);
 
   sctx.restore();
   clip();
@@ -834,20 +840,32 @@ magInput.addEventListener("input", () => {
 });
 
 const magGroup = document.getElementById("magGroup");
+const zoomGroup = document.getElementById("zoomGroup");
 const legendLanded = document.getElementById("legendLanded");
 function setMode(m) {
   mode = m;
   document.getElementById("viewLoupe").classList.toggle("active", m === "loupe");
   document.getElementById("viewOverlay").classList.toggle("active", m === "overlay");
   magGroup.hidden = m === "loupe";
+  zoomGroup.hidden = m === "overlay";
   legendLanded.hidden = m === "overlay";
   zoomNote.textContent = m === "loupe"
-    ? "loupe: the pen's neighborhood at fixed zoom"
+    ? "loupe: the pen's neighborhood, magnified — ring shows its reach"
     : `offsets & ellipses magnified ×${mag}`;
   render();
 }
 document.getElementById("viewLoupe").addEventListener("click", () => setMode("loupe"));
 document.getElementById("viewOverlay").addEventListener("click", () => setMode("overlay"));
+
+const zoomInput = document.getElementById("zoom");
+const zoomVal = document.getElementById("zoomVal");
+function setLoupeZ(z) {
+  loupeZ = z;
+  zoomInput.value = z;
+  zoomVal.textContent = "×" + (z / 350).toFixed(z % 350 === 0 ? 0 : 1);
+  render();
+}
+zoomInput.addEventListener("input", () => setLoupeZ(parseInt(zoomInput.value, 10)));
 
 const topkInput = document.getElementById("topk");
 const topkVal = document.getElementById("topkVal");
@@ -910,6 +928,8 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
   if (m) t = tFloat = Math.min(N - 1, Math.max(startLen, parseInt(m[1], 10)));
   const k = location.hash.match(/k=(\d+)/);
   if (k) setTopK(Math.min(20, Math.max(1, parseInt(k[1], 10))));
+  const z = location.hash.match(/z=(\d+)/);
+  if (z) setLoupeZ(Math.min(900, Math.max(150, parseInt(z[1], 10))));
   const v = location.hash.match(/view=(loupe|overlay)/);
   setMode(v ? v[1] : "loupe");
 }
