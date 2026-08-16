@@ -229,7 +229,7 @@ def main():
     hidden_size = int(os.environ.get("HIDDEN_SIZE", "128"))
     num_layers = int(os.environ.get("NUM_LAYERS", "2"))
     embedding_size = int(os.environ.get("EMBEDDING_SIZE", "3"))
-    dropout = 0.2
+    dropout = float(os.environ.get("DROPOUT", "0.2"))
     batch_size = int(os.environ.get("BATCH_SIZE", "64"))
     learning_rate = float(os.environ.get("LR", "1e-3"))
     # High cap so early stopping (below) is the real terminator -- the point is to
