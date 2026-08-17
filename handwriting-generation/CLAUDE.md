@@ -523,6 +523,22 @@ Fixes landed, in order:
   animated SVG keeps per-stroke mean widths: its draw-on is a
   `stroke-dasharray` trick that only works on stroked paths. A static
   (non-animated) download variant with ribbons would close the gap.
+- **Capacity retry (2026-08-17): regularized width lost NARROWLY.**
+  h256 rerun on 2,034 lines with `DROPOUT=0.3` (train.py's dropout is now the
+  `DROPOUT` env var; the 2026-08-11 run used 0.1): early-stopped at epoch 392
+  (3h45m, ~$2.80), best val **−4.6611** vs the h128 champion's **−4.7367** on
+  the *identical* corpus/split — a fair number-to-number loss by 0.076 nats,
+  vs the 0.31-nat loss of the unregularized attempt. It also blew past the old
+  h256 stall point (−4.5751) with a moderate (~0.17) train/val gap. One large
+  **MDN loss spike** at epoch ~270 (train −4.77→−4.19 in 10 epochs, classic
+  logsumexp/σ gradient kick) recovered fully within 30 epochs but burned part
+  of the early-stop window. Read: width is no longer capacity-starved so much
+  as data-starved at the margin — the gap shrank 4× from +522 lines and +0.2
+  dropout. Before a third attempt: add **gradient clipping** (the spike is
+  free exploration time lost) and either Graves adaptive weight noise or
+  another ~500 collected lines. Champion remains h128 (`best_model.eot.pt`,
+  model version 52bc530824be). Artifacts (load with `HIDDEN_SIZE=256`) in
+  `runs/2026-08-17-h256-retry/`, gitignored.
 - **Capacity A/B result (2026-08-11): unregularized width LOST.**
   `HIDDEN_SIZE=256` (1.19M params, 3.4×) on 1,512 lines: epoch time ~25s,
   *unchanged* from h128 (launch-bound → width is compute-free), converged
