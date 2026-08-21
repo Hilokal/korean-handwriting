@@ -11,6 +11,16 @@ JamoCount = 3
 from tokenizer import LeadingCount, SymbolCount, TrailingCount, VowelCount, tokenize
 
 
+def _frozen_onehot(rows: int, width: int, offset: int) -> nn.Embedding:
+    """An identity lookup table: row r is one-hot at column offset + r, frozen."""
+    emb = nn.Embedding(rows, width)
+    with torch.no_grad():
+        emb.weight.zero_()
+        emb.weight[:, offset : offset + rows] = torch.eye(rows)
+    emb.weight.requires_grad_(False)
+    return emb
+
+
 class HandwritingRNN(nn.Module):
     """Simple GRU-based RNN for handwriting generation.
 
@@ -38,6 +48,7 @@ class HandwritingRNN(nn.Module):
         sliding_window_k=10,
         abs_pos_dim=2,
         embedding_size=3,
+        onehot=False,
     ):
         super().__init__()
 
@@ -54,16 +65,36 @@ class HandwritingRNN(nn.Module):
         )
         self.register_buffer("pos_std", torch.tensor([9.931, 0.620]).view(1, 1, 2))
 
-        self.leading_embeddings = nn.Embedding(LeadingCount, embedding_size)
-        self.vowel_embeddings = nn.Embedding(VowelCount, embedding_size)
-        self.trailing_embeddings = nn.Embedding(TrailingCount, embedding_size)
+        if onehot:
+            # Fixed one-hot conditioning (Graves 2013): every table row is a
+            # frozen identity vector, so `c_u` lives in an orthogonal space — an
+            # attention blend of two units can never alias a third, and the
+            # learned per-character representation moves into the GRU input
+            # matrices (untied per gate and per layer; `embedding_size` is
+            # ignored). Layout of the 76-dim `c_u`: jamo one-hots in
+            # [0, 19+21+28), symbols in their own SymbolCount-wide block after.
+            # The cross-block zeros are baked into the tables (trailing carries
+            # the symbol block's zeros, symbol the jamo blocks') so forward()'s
+            # concat/where logic and the ONNX export stay unchanged.
+            jamo_dim = LeadingCount + VowelCount + TrailingCount
+            window_dim = jamo_dim + SymbolCount  # size of c_u / the window vector
+            self.leading_embeddings = _frozen_onehot(LeadingCount, LeadingCount, 0)
+            self.vowel_embeddings = _frozen_onehot(VowelCount, VowelCount, 0)
+            self.trailing_embeddings = _frozen_onehot(
+                TrailingCount, TrailingCount + SymbolCount, 0
+            )
+            self.symbol_embeddings = _frozen_onehot(SymbolCount, window_dim, jamo_dim)
+        else:
+            self.leading_embeddings = nn.Embedding(LeadingCount, embedding_size)
+            self.vowel_embeddings = nn.Embedding(VowelCount, embedding_size)
+            self.trailing_embeddings = nn.Embedding(TrailingCount, embedding_size)
 
-        # Non-Hangul units (space, punctuation) condition on this instead of the
-        # jamo tables. Emits the same width as the three jamo embeddings concatenated
-        # (embedding_size * JamoCount) so the window vector stays one fixed size.
-        self.symbol_embeddings = nn.Embedding(SymbolCount, embedding_size * JamoCount)
+            # Non-Hangul units (space, punctuation) condition on this instead of the
+            # jamo tables. Emits the same width as the three jamo embeddings concatenated
+            # (embedding_size * JamoCount) so the window vector stays one fixed size.
+            self.symbol_embeddings = nn.Embedding(SymbolCount, embedding_size * JamoCount)
 
-        window_dim = embedding_size * JamoCount  # size of c_u / the window vector
+            window_dim = embedding_size * JamoCount  # size of c_u / the window vector
         self.gru = GRUWithSlidingAttention(
             input_size=input_size + abs_pos_dim,
             window_dim=window_dim,

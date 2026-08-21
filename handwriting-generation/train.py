@@ -229,6 +229,9 @@ def main():
     hidden_size = int(os.environ.get("HIDDEN_SIZE", "128"))
     num_layers = int(os.environ.get("NUM_LAYERS", "2"))
     embedding_size = int(os.environ.get("EMBEDDING_SIZE", "3"))
+    # ONEHOT=1: fixed one-hot conditioning vectors (76-dim window) instead of
+    # learned embeddings; EMBEDDING_SIZE is ignored. See model.py.
+    onehot = bool(os.environ.get("ONEHOT"))
     dropout = float(os.environ.get("DROPOUT", "0.2"))
     batch_size = int(os.environ.get("BATCH_SIZE", "64"))
     learning_rate = float(os.environ.get("LR", "1e-3"))
@@ -299,8 +302,11 @@ def main():
         num_layers=num_layers,
         dropout=dropout,
         embedding_size=embedding_size,
+        onehot=onehot,
     ).to(device)
 
+    if onehot:
+        print("One-hot conditioning (ONEHOT=1): frozen identity tables, window_dim=76")
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # Loss functions. XY uses the MDN NLL (see compute_losses); pen is a masked

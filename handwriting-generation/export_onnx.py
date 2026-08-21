@@ -111,6 +111,7 @@ def load_model(args) -> HandwritingRNN:
         num_layers=args.num_layers,
         dropout=0.0,
         embedding_size=args.embedding_size,
+        onehot=args.onehot,
     )
     model.load_state_dict(
         torch.load(args.model, map_location="cpu", weights_only=True)
@@ -139,6 +140,7 @@ def main():
     ap.add_argument("--hidden-size", type=int, default=int(os.environ.get("HIDDEN_SIZE", "128")))
     ap.add_argument("--num-layers", type=int, default=int(os.environ.get("NUM_LAYERS", "3")))
     ap.add_argument("--embedding-size", type=int, default=int(os.environ.get("EMBEDDING_SIZE", "8")))
+    ap.add_argument("--onehot", action="store_true", default=bool(os.environ.get("ONEHOT")))
     ap.add_argument("--out-dir", default="../demo-app/public/model")
     args = ap.parse_args()
 

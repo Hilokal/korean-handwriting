@@ -113,16 +113,20 @@ pressure.
   #12). So `U` = input characters + 1 everywhere.
 
 In `model.py`, Hangul units are conditioned on `concat(leading, vowel, trailing
-embeddings)` (9-dim); symbol units on a `symbol_embeddings` table emitting the
-same 9-dim vector. So the per-character conditioning vector `c_u` is 9-dim
-regardless of type, the window vector `w_t` (a φ-weighted sum of `c_u`) is 9-dim,
-and the GRU layer-0 input width is 15 (`4` pen dims `[dx, dy, penState, f]` +
-`2` abs-position + `9` window).
+embeddings)` (`3*embedding_size`); symbol units on a `symbol_embeddings` table
+emitting the same width. So the per-character conditioning vector `c_u`, and the
+window vector `w_t` (a φ-weighted sum of `c_u`), are `3*embedding_size`-dim
+regardless of type. The code default is `embedding_size=3`, but **every promoted
+model trains with `EMBEDDING_SIZE=8`** — so in practice `c_u`/`w_t` are 24-dim
+and the GRU layer-0 input width is 30 (`4` pen dims `[dx, dy, penState, f]` +
+`2` abs-position + `24` window). Embedding-size sweep (pre-git, single-char era):
+3→8 clearly helped, 8→12 was a wash — hence 8 everywhere since.
 
 ## Model architecture
 
 - **Embeddings:** three `nn.Embedding`s (one per jamo slot) plus one
-  `symbol_embeddings`. `embedding_size=3` per jamo; the symbol table emits `3*3=9`.
+  `symbol_embeddings` emitting `3*embedding_size`. Code default `embedding_size=3`;
+  all promoted runs use `EMBEDDING_SIZE=8` (see Tokens above for the sweep result).
 - **`GRUWithSlidingAttention`** — a manual `GRUCell` loop (not `nn.GRU`) so the
   attention window can be computed mid-sequence and fed back. Per timestep:
   - Layer 0's input is `cat([x_t, w_{t-1}])` — the pen input plus the *previous*
@@ -223,6 +227,12 @@ EXPORT=1 python train.py      # real multi-character lines (../data/export/), he
 SYNTHETIC=1 python train.py   # stitched multi-char samples (attention-window smoke test)
 python train.py               # original single-character folders (../data/<char>/)
 ```
+
+Capacity/arch knobs (must match at inference/export): `HIDDEN_SIZE`,
+`NUM_LAYERS`, `EMBEDDING_SIZE`, `DROPOUT`, and `ONEHOT=1` — fixed one-hot
+conditioning (Graves-style, 76-dim window; frozen identity tables,
+`EMBEDDING_SIZE` ignored; see progress #14). `inference.py` and
+`export_onnx.py` (`--onehot`) read the same `ONEHOT` env var.
 
 Pull the latest line data from production first:
 
@@ -516,6 +526,43 @@ Fixes landed, in order:
     Old feedback records' (seed, modelVersion) again don't regenerate — RNG
     stream unchanged this time, but weights/tokens differ.
 
+14. **One-hot conditioning knob (2026-08-21, implementation landed — A/B
+    pending).** `ONEHOT=1` replaces the learned jamo/symbol embeddings with
+    frozen identity tables: `c_u` becomes a 76-dim orthogonal one-hot (19+21+28
+    jamo dims + `SymbolCount` symbol dims, cross-block zeros baked into the
+    tables so `forward()`/ONNX are untouched). Rationale: the pre-git
+    embedding-size sweep (3→8 helped, 8→12 wash) killed "more width", but not
+    the two things one-hot changes — attention now *mixes in orthogonal space*
+    (a φ-blend of two jamo can never alias a third; with learned emb8 the
+    aliasing happens before anything trainable sees it), and the per-character
+    representation moves into the GRU input matrices, *untied* per gate and per
+    layer (emb8 forces all 3 gates × 3 layers to share one rank-24 view).
+    Cost: window 24→76, +61.6k params (410.8k vs 349.2k, ~18%). Side benefit:
+    `w_t` is directly interpretable as a distribution over jamo — the right
+    checkpoint for the meetup attention viz. Verified: one-hot layout/orthogonality
+    asserts, tables frozen through an Adam step, `generate()` runs, 2-epoch
+    EXPORT smoke converges. **A/B protocol:** train vs the current champion
+    recipe on the same export/split (val NLL comparable only then), decide on
+    same-seed renders, looking specifically at jamo→jamo attention handoffs —
+    that's where the aliasing mechanism predicts a difference.
+    **A/B result (2026-08-21): NEGATIVE — champion stays.** Trained on the
+    byte-identical 2,034-line snapshot/split as the batchim champion (tar-piped
+    from home, no fresh export), champion recipe + `ONEHOT=1`, RunPod
+    4090/Ryzen, ~32s/epoch: early-stopped at epoch 839 (7h45m, ~$6), best val
+    **−4.6709** vs the champion's **−4.7367** — a fair number-to-number loss
+    of 0.066 nats; pen also worse (0.229 vs 0.219). Train loss matched or beat
+    the champion throughout while val lagged → a *generalization* gap, not an
+    optimization problem: one-hot's +61.6k params sit on the window-input
+    columns, the one path dropout never touches (`layer_in` drops only
+    `below`, never `w`), so the removed rank-24 bottleneck was doing real work
+    as a regularizer. Same-seed renders (42/7/99, bias 0 and 0.75): a wash —
+    no systematic jamo-handoff improvement, so the aliasing failure mode is
+    not a live problem at emb8. If ever revisited, the missing ingredient is
+    window-path regularization (dropout on `w`, weight decay on window
+    columns, or Graves adaptive weight noise — the same lever h256 is blocked
+    on). Artifacts + comparison renders in `runs/2026-08-21-onehot/`
+    (gitignored).
+
 **Still open:**
 - **Within-stroke taper in the animated download SVG** — the live canvas now
   renders filled ribbons with per-point width (`strokes.ts strokeRibbonPath`,
@@ -534,9 +581,11 @@ Fixes landed, in order:
   logsumexp/σ gradient kick) recovered fully within 30 epochs but burned part
   of the early-stop window. Read: width is no longer capacity-starved so much
   as data-starved at the margin — the gap shrank 4× from +522 lines and +0.2
-  dropout. Before a third attempt: add **gradient clipping** (the spike is
-  free exploration time lost) and either Graves adaptive weight noise or
-  another ~500 collected lines. Champion remains h128 (`best_model.eot.pt`,
+  dropout. Before a third attempt: **tighten gradient clipping** (note:
+  `clip_grad_norm_(max_norm=1.0)` has existed since the initial commit — the
+  spike happened *with* it, so the lever is a lower max_norm, not adding a
+  clip) and either Graves adaptive weight noise or another ~500 collected
+  lines. Champion remains h128 (`best_model.eot.pt`,
   model version 52bc530824be). Artifacts (load with `HIDDEN_SIZE=256`) in
   `runs/2026-08-17-h256-retry/`, gitignored.
 - **Capacity A/B result (2026-08-11): unregularized width LOST.**

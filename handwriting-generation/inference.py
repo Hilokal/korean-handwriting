@@ -24,6 +24,7 @@ def load_model(checkpoint_path, device):
         num_layers=int(os.environ.get("NUM_LAYERS", "2")),
         dropout=0.0,
         embedding_size=int(os.environ.get("EMBEDDING_SIZE", "3")),
+        onehot=bool(os.environ.get("ONEHOT")),
     ).to(device)
 
     model.load_state_dict(
