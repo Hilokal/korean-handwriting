@@ -17,6 +17,7 @@ interface SubmitBody {
   dots: Array<{ x: number; y: number; dotType: number; timeStamp: number }>;
   penMac?: string;
   pageInfo?: { section: number; owner: number; book: number; page: number };
+  undoCount?: number;
 }
 
 function validateSubmit(body: unknown): string | null {
@@ -28,6 +29,8 @@ function validateSubmit(body: unknown): string | null {
   if (typeof b.startTime !== "number" || typeof b.endTime !== "number")
     return "startTime/endTime required";
   if (!Number.isInteger(b.chunkIndex) || b.chunkIndex < 0) return "chunkIndex required";
+  if (b.undoCount !== undefined && (!Number.isInteger(b.undoCount) || b.undoCount < 0))
+    return "malformed undoCount";
   for (const dot of b.dots) {
     // dotType range matches the SDK's DotTypes enum: DOWN/MOVE/UP/HOVER/INFO/ERROR.
     if (
@@ -96,8 +99,8 @@ workRoutes.post("/:id/submit", (req, res) => {
         `INSERT INTO recordings
            (user_id, sentence_id, assignment_id, chunk_index, chunk_text,
             start_time, end_time, dot_count,
-            pen_mac, page_section, page_owner, page_book, page_page)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            pen_mac, page_section, page_owner, page_book, page_page, undo_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         req.user!.id,
@@ -113,6 +116,7 @@ workRoutes.post("/:id/submit", (req, res) => {
         body.pageInfo?.owner ?? null,
         body.pageInfo?.book ?? null,
         body.pageInfo?.page ?? null,
+        body.undoCount ?? 0,
       ).lastInsertRowid as number;
     db.prepare(
       "INSERT INTO recording_dots (recording_id, dots_json) VALUES (?, ?)",

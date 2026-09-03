@@ -158,6 +158,14 @@ const migrations: string[] = [
     SELECT id, dots_json FROM recordings;
   ALTER TABLE recordings DROP COLUMN dots_json;
   `,
+  // 10: how many times the worker pressed undo-last-stroke before submitting.
+  // The undone strokes never leave the browser, so this count is the only
+  // record that a recording was edited — it can't be reconstructed later.
+  // Rows predating the feature (and the column) are 0, indistinguishable from
+  // "no undo"; the feature shipped 2026-08-31, so created_at disambiguates.
+  `
+  ALTER TABLE recordings ADD COLUMN undo_count INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export function migrate(): void {

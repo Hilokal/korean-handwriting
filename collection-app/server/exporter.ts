@@ -19,6 +19,7 @@ interface RecordingRow {
   end_time: number;
   dot_count: number;
   pen_mac: string | null;
+  undo_count: number;
   dots_json: string;
   created_at: string;
 }
@@ -43,7 +44,7 @@ function recordingQuery(filters: ExportFilters, withDots: boolean, afterId?: num
   const stmt = db.prepare(
     `SELECT r.id, r.user_id, u.name AS user_name, r.sentence_id, s.text,
             r.chunk_index, r.chunk_text,
-            r.start_time, r.end_time, r.dot_count, r.pen_mac, r.created_at
+            r.start_time, r.end_time, r.dot_count, r.pen_mac, r.undo_count, r.created_at
             ${withDots ? ", d.dots_json" : ""}
      FROM recordings r
      JOIN users u ON u.id = r.user_id
@@ -162,6 +163,7 @@ export async function streamExportZip(
         sentenceId: r.sentence_id,
         userId: r.user_id,
         recordingId: r.id,
+        undoCount: r.undo_count,
       },
     };
     await appendEntry(

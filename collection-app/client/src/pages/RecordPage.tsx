@@ -21,9 +21,10 @@ interface Draft {
   assignmentId: number;
   chunkIndex: number;
   dots: RecordedDot[];
+  undoCount?: number;
 }
 
-function loadDraft(assignmentId: number, chunkIndex: number): RecordedDot[] | null {
+function loadDraft(assignmentId: number, chunkIndex: number): Draft | null {
   try {
     const raw = sessionStorage.getItem(DRAFT_KEY);
     if (!raw) return null;
@@ -31,18 +32,23 @@ function loadDraft(assignmentId: number, chunkIndex: number): RecordedDot[] | nu
     return draft.assignmentId === assignmentId &&
       draft.chunkIndex === chunkIndex &&
       draft.dots.length > 0
-      ? draft.dots
+      ? draft
       : null;
   } catch {
     return null;
   }
 }
 
-function saveDraft(assignmentId: number, chunkIndex: number, dots: RecordedDot[]): void {
+function saveDraft(
+  assignmentId: number,
+  chunkIndex: number,
+  dots: RecordedDot[],
+  undoCount: number,
+): void {
   try {
     sessionStorage.setItem(
       DRAFT_KEY,
-      JSON.stringify({ assignmentId, chunkIndex, dots }),
+      JSON.stringify({ assignmentId, chunkIndex, dots, undoCount }),
     );
   } catch {
     // quota exceeded or unavailable — drafts are best-effort
@@ -80,6 +86,11 @@ export function RecordPage() {
   // pen-down keeps the buffer a sequence of complete DOWN→MOVE→UP strokes.
   const awaitDownRef = useRef(false);
 
+  // Undo presses for the current attempt, submitted as undoCount. The undone
+  // strokes never leave the browser, so this is the only record the recording
+  // was edited. Resets with the buffer (a full redo starts a fresh attempt).
+  const undoCountRef = useRef(0);
+
   const ingestDot = useCallback((dot: RecordedDot) => {
     if (awaitDownRef.current) {
       if (dot.dotType !== 0) return;
@@ -114,6 +125,7 @@ export function RecordPage() {
           assignmentRef.current.assignmentId,
           assignmentRef.current.nextChunkIndex,
           dotsRef.current,
+          undoCountRef.current,
         );
       }
     },
@@ -142,7 +154,8 @@ export function RecordPage() {
         // server-side, so the same assignment/chunk comes back.
         const draft = loadDraft(a.assignmentId, a.nextChunkIndex);
         if (draft) {
-          for (const dot of draft) ingestDot(dot);
+          undoCountRef.current = draft.undoCount ?? 0;
+          for (const dot of draft.dots) ingestDot(dot);
         }
       })
       .catch((e) => {
@@ -155,6 +168,7 @@ export function RecordPage() {
     dotsRef.current = [];
     clearDraft();
     awaitDownRef.current = true;
+    undoCountRef.current = 0;
     setDotCount(0);
     setStrokeCount(0);
     setPhase("writing");
@@ -171,6 +185,7 @@ export function RecordPage() {
     if (lastDown < 0) return;
     dotsRef.current = dots.slice(0, lastDown);
     awaitDownRef.current = true;
+    undoCountRef.current += 1;
     setDotCount(dotsRef.current.length);
     setStrokeCount(dotsRef.current.filter((d) => d.dotType === 0).length);
     if (assignmentRef.current) {
@@ -180,6 +195,7 @@ export function RecordPage() {
           assignmentRef.current.assignmentId,
           assignmentRef.current.nextChunkIndex,
           dotsRef.current,
+          undoCountRef.current,
         );
     }
     setPhase("writing");
@@ -214,6 +230,7 @@ export function RecordPage() {
           dots,
           penMac,
           pageInfo: analysis.modalPage ?? dots[0].pageInfo,
+          undoCount: undoCountRef.current,
         },
       );
       setDoneCount((n) => n + 1);
