@@ -75,7 +75,16 @@ export function RecordPage() {
   const assignmentRef = useRef<Assignment | null>(null);
   assignmentRef.current = assignment;
 
+  // After an undo/redo the tail of an in-progress stroke can still stream in
+  // (MOVE/UP dots whose DOWN was just discarded). Dropping dots until the next
+  // pen-down keeps the buffer a sequence of complete DOWN→MOVE→UP strokes.
+  const awaitDownRef = useRef(false);
+
   const ingestDot = useCallback((dot: RecordedDot) => {
+    if (awaitDownRef.current) {
+      if (dot.dotType !== 0) return;
+      awaitDownRef.current = false;
+    }
     const dots = dotsRef.current;
     dots.push(dot);
     setDotCount(dots.length);
@@ -145,8 +154,34 @@ export function RecordPage() {
   const resetBuffer = useCallback(() => {
     dotsRef.current = [];
     clearDraft();
+    awaitDownRef.current = true;
     setDotCount(0);
     setStrokeCount(0);
+    setPhase("writing");
+  }, []);
+
+  // Drop the most recent stroke (everything from the last pen-down on). Fixing
+  // a typo this way beats both alternatives: rewriting the whole chunk, or
+  // submitting ink that doesn't match the transcript. Returns to the writing
+  // phase so the corrected stroke can be added. The draft is saved eagerly —
+  // the throttled save must not resurrect an undone stroke on reload.
+  const undoLastStroke = useCallback(() => {
+    const dots = dotsRef.current;
+    const lastDown = dots.map((d) => d.dotType).lastIndexOf(0);
+    if (lastDown < 0) return;
+    dotsRef.current = dots.slice(0, lastDown);
+    awaitDownRef.current = true;
+    setDotCount(dotsRef.current.length);
+    setStrokeCount(dotsRef.current.filter((d) => d.dotType === 0).length);
+    if (assignmentRef.current) {
+      if (dotsRef.current.length === 0) clearDraft();
+      else
+        saveDraft(
+          assignmentRef.current.assignmentId,
+          assignmentRef.current.nextChunkIndex,
+          dotsRef.current,
+        );
+    }
     setPhase("writing");
   }, []);
 
@@ -310,6 +345,11 @@ export function RecordPage() {
             >
               {s.doneWriting}
             </button>
+            {strokeCount > 0 && (
+              <button className="btn btn-secondary" onClick={undoLastStroke}>
+                {s.undoStroke}
+              </button>
+            )}
             {dotCount > 0 && (
               <button className="btn btn-secondary" onClick={resetBuffer}>
                 {s.redo}
@@ -356,6 +396,13 @@ export function RecordPage() {
           <div className="actions">
             <button className="btn btn-primary" disabled={submitting} onClick={handleSubmit}>
               {submitting ? s.submitting : s.submit}
+            </button>
+            <button
+              className="btn btn-secondary"
+              disabled={submitting}
+              onClick={undoLastStroke}
+            >
+              {s.undoStroke}
             </button>
             <button
               className="btn btn-secondary"
