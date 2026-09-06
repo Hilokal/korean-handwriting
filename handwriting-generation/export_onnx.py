@@ -136,7 +136,7 @@ def example_inputs(model: HandwritingRNN, num_layers: int, U: int = 5):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--model", default="best_model.emb8.pt")
+    ap.add_argument("--model", default="best_model.eot.pt")
     ap.add_argument("--hidden-size", type=int, default=int(os.environ.get("HIDDEN_SIZE", "128")))
     ap.add_argument("--num-layers", type=int, default=int(os.environ.get("NUM_LAYERS", "3")))
     ap.add_argument("--embedding-size", type=int, default=int(os.environ.get("EMBEDDING_SIZE", "8")))

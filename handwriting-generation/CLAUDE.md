@@ -34,7 +34,7 @@ pressure.
 | `test_onnx_parity.py` | Two-way parity check over a 200-step stateful rollout: wrapper vs `model.forward` (catches wrapper drift) and ONNX Runtime vs wrapper (catches export bugs). Must print `PARITY OK`. |
 | `download_export.sh` | Downloads all recordings from the production collection app into `../data/export/` via the admin export endpoint. Secure password prompt; re-run to refresh. |
 | `fetch_reference_texts.py` | Fetches clean Hangul sentences from Korean Wikipedia into `../data/reference-texts/` (per-page `.txt` + `all.jsonl`, gitignored). Filters to pure-Hangul sentences and reports jamo/syllable coverage. Supports `--featured`/`--good`/`--category` bulk fetching, `--resume`, and authenticated fetching via `WIKI_USERNAME`/`WIKI_BOT_PASSWORD` env vars (bot password; anonymous requests get heavily rate-limited). |
-| `best_model.eot.pt` | The bundled trained model (3-layer, hidden 128, embedding_size 8, pressure + EOT/tail — the 2026-08-10 retrain on 1,463 lines). Load with `NUM_LAYERS=3 EMBEDDING_SIZE=8`. Training writes new checkpoints to `best_model.pt` (gitignored). `best_model.pressure.pt` / `best_model.emb8.pt` are older bundled models, historical only; they no longer load. |
+| `best_model.eot.pt` | The bundled trained model (3-layer, hidden 128, embedding_size 8, pressure + EOT/tail — the 2026-09-06 batchim2 retrain on 2,443 lines incl. the completed 받침-saturation batch; see progress #15). Load with `NUM_LAYERS=3 EMBEDDING_SIZE=8`. Training writes new checkpoints to `best_model.pt` (gitignored). `best_model.pressure.pt` / `best_model.emb8.pt` are older bundled models, historical only; they no longer load. |
 | `babysit_pod_training.sh` | Watches a RunPod training run; on completion (or crash) pulls `best_model.pt` + `checkpoint.pt` + the log into `runs/<date>-<pod>/`, then deletes the pod (only if the pull verifiably succeeded). Run detached under `nohup caffeinate -i` for overnight runs. |
 
 ## Data
@@ -232,7 +232,11 @@ Capacity/arch knobs (must match at inference/export): `HIDDEN_SIZE`,
 `NUM_LAYERS`, `EMBEDDING_SIZE`, `DROPOUT`, and `ONEHOT=1` — fixed one-hot
 conditioning (Graves-style, 76-dim window; frozen identity tables,
 `EMBEDDING_SIZE` ignored; see progress #14). `inference.py` and
-`export_onnx.py` (`--onehot`) read the same `ONEHOT` env var.
+`export_onnx.py` (`--onehot`) read the same `ONEHOT` env var. `TB_DIR=<dir>`
+writes TensorBoard scalars every epoch (loss/xy/pen × train/val + lr, plus a
+Custom Scalars layout overlaying train vs val; needs `pip install tensorboard`)
+— on a pod, serve with `tensorboard --logdir tb --bind_all` in tmux and either
+ssh -L 6006 or a cloudflared quick tunnel (see the RunPod memory note).
 
 Pull the latest line data from production first:
 
@@ -563,6 +567,33 @@ Fixes landed, in order:
     on). Artifacts + comparison renders in `runs/2026-08-21-onehot/`
     (gitignored).
 
+15. **받침-saturation retrain + promotion (2026-09-06/07) — dose-response
+    CONFIRMED.** u2 completed the 296-sentence saturation batch (progress
+    tracked via the collection DB; undo-stroke feature kept throughput up,
+    ~15% of his post-deploy recordings used it). Fresh export: 2,443 lines
+    (+409/+20% over the 2,034 champion corpus). Champion recipe, RunPod
+    4090/Ryzen (EPYC re-roll dodged via the decoy trick — see the RunPod
+    memory), 37s/epoch, live TensorBoard via `TB_DIR` + cloudflared tunnel:
+    early-stopped at epoch 683 (7h, ~$5.20), best val **−4.7238** on the new
+    1,948/495 split. Full-val comparison vs champion is leakage-poisoned in
+    the champion's favor (it trained on most of the new val sentences; its
+    0.188 full-val pen betrays memorization). **Leak-free comparison** (64
+    val recordings of saturation sentences, unseen by both): new **−4.9126
+    vs champion −4.8401** (+0.073 nats), pen 0.208 vs 0.216. Renders (bias
+    0.75, seed 42): improvements localized in the dosed families — ㄺ (맑고
+    no longer reads 밀고), ㅍ (깊), ㄻ (닮), ㅎ (좋아요 no longer 종아요);
+    ㄵ/쌓 partial (lower-dose); non-target syllables a wash, no regressions.
+    Acceptance renders 42/7/99 legible, self-terminating 331–333 pts.
+    Promoted + shipped to hangul.ink (5b9d48e2c367), PARITY OK, demo smoke +
+    browser tests green. TB observation for the next cycle: the train/val
+    gap opens much earlier in pen than XY — consistent with the pen head
+    being information-starved, not capacity-starved; strengthens the case
+    for the **timing/velocity input** as the next experiment (plus a free
+    post-hoc pen-head refit on the frozen trunk to size head/trunk
+    co-adaptation). Second worker (userId 4, 김여울, 340 lines) now exists —
+    writer-conditioning becomes feasible; exports filter to u2 via `.env`
+    `USER_ID=2`.
+
 **Still open:**
 - **Within-stroke taper in the animated download SVG** — the live canvas now
   renders filled ribbons with per-point width (`strokes.ts strokeRibbonPath`,
@@ -648,9 +679,11 @@ connections (see the ~1.05 predictability ceiling in the progress log).
   bundled until the EOT change (progress #12) grew `SymbolCount` 7→8; **no
   longer loads**, historical only. Local extras (gitignored): resumable full
   state in `checkpoint-pressure.pt`, log in `train-pressure.log`.
-- `best_model.eot.pt` — **the bundled model** (committed): the 2026-08-10
-  EOT retrain (progress #13), promoted after acceptance renders + the
-  hangul.ink ship. Load with `NUM_LAYERS=3 EMBEDDING_SIZE=8`. Best val
-  −4.6870, pen 0.227, clean self-terminating line endings. Run artifacts
-  (resumable checkpoint, log, test renders) in `runs/2026-08-10-eot-retrain/`
-  (gitignored).
+- `best_model.eot.pt` — **the bundled model** (committed): the 2026-09-06
+  batchim2 retrain (progress #15), promoted after acceptance renders + the
+  hangul.ink ship (model version 5b9d48e2c367). Load with `NUM_LAYERS=3
+  EMBEDDING_SIZE=8`. Best val −4.7238 on the 2,443-line split; beats the
+  prior champion +0.073 nats on the leak-free saturation subset. Same
+  filename previously held the 08-10 EOT retrain and the 08-16 batchim
+  retrain (52bc530824be) — recover via git history. Run artifacts in
+  `runs/2026-09-06-batchim2/` (gitignored).

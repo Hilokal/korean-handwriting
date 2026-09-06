@@ -232,6 +232,9 @@ def main():
     # ONEHOT=1: fixed one-hot conditioning vectors (76-dim window) instead of
     # learned embeddings; EMBEDDING_SIZE is ignored. See model.py.
     onehot = bool(os.environ.get("ONEHOT"))
+    # TB_DIR=<dir>: write TensorBoard scalars there every epoch (the console
+    # log only prints every 10th). Needs the `tensorboard` package.
+    tb_dir = os.environ.get("TB_DIR")
     dropout = float(os.environ.get("DROPOUT", "0.2"))
     batch_size = int(os.environ.get("BATCH_SIZE", "64"))
     learning_rate = float(os.environ.get("LR", "1e-3"))
@@ -367,6 +370,22 @@ def main():
         torch.save(model.state_dict(), "best_model.pt")
         print(f"Warm-started from {init_path}: initial val loss {best_val_loss:.4f}")
 
+    writer = None
+    if tb_dir:
+        from torch.utils.tensorboard import SummaryWriter
+
+        writer = SummaryWriter(tb_dir)
+        # Custom Scalars layout: overlay train vs val on shared axes (the
+        # default Scalars tab draws one chart per tag).
+        writer.add_custom_scalars({
+            "combined": {
+                "loss (train vs val)": ["Multiline", ["loss/train", "loss/val"]],
+                "xy (train vs val)": ["Multiline", ["xy/train", "xy/val"]],
+                "pen (train vs val)": ["Multiline", ["pen/train", "pen/val"]],
+            }
+        })
+        print(f"TensorBoard logging to {tb_dir}")
+
     start_time = time.time()
 
     for epoch in range(start_epoch, num_epochs):
@@ -379,6 +398,15 @@ def main():
         )
 
         scheduler.step(val_loss)
+
+        if writer:
+            writer.add_scalar("loss/train", train_loss, epoch)
+            writer.add_scalar("loss/val", val_loss, epoch)
+            writer.add_scalar("xy/train", train_xy, epoch)
+            writer.add_scalar("xy/val", val_xy, epoch)
+            writer.add_scalar("pen/train", train_pen, epoch)
+            writer.add_scalar("pen/val", val_pen, epoch)
+            writer.add_scalar("lr", optimizer.param_groups[0]["lr"], epoch)
 
         # Save every strict new best; reset patience only on a meaningful one
         # (see early_stop_min_delta above).
@@ -428,6 +456,9 @@ def main():
                 f"\nEarly stopping at epoch {epoch + 1} (no improvement for {early_stop_patience} epochs)"
             )
             break
+
+    if writer:
+        writer.close()
 
     total_time = time.time() - start_time
     total_str = time.strftime("%H:%M:%S", time.gmtime(total_time))

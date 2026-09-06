@@ -1,5 +1,5 @@
 {
-  "version": "52bc530824be",
+  "version": "5b9d48e2c367",
   "checkpoint": "best_model.eot.pt",
   "hiddenSize": 128,
   "numLayers": 3,

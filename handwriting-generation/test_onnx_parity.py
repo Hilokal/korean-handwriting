@@ -16,6 +16,7 @@ drift compounds the way it would in production; the tolerance below reflects
 """
 
 import argparse
+import os
 
 import numpy as np
 import onnxruntime as ort
@@ -31,11 +32,12 @@ TEXT = "안녕하세요, 반갑습니다!"
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="best_model.emb8.pt")
+    ap.add_argument("--model", default="best_model.eot.pt")
     ap.add_argument("--hidden-size", type=int, default=128)
     ap.add_argument("--num-layers", type=int, default=3)
     ap.add_argument("--embedding-size", type=int, default=8)
     ap.add_argument("--onnx", default="../demo-app/public/model/handwriting-step.onnx")
+    ap.add_argument("--onehot", action="store_true", default=bool(os.environ.get("ONEHOT")))
     args = ap.parse_args()
 
     torch.manual_seed(0)
