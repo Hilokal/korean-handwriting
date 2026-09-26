@@ -136,16 +136,47 @@ export function getOrAssignNext(userId: number): Assignment | null {
   if (candidates.length === 0) {
     // User has done every sentence containing their rarest syllables: allow
     // repeats — multiple recordings of a sentence are still valid style samples.
-    candidates = db
-      .prepare(candidateSql(false))
-      .all(...targets)
-      .map((r) => (r as { sentence_id: number }).sentence_id);
+    // Two rules keep repeat mode from looping on a handful of lines (u2 hit
+    // this in 2026-09 after exhausting the pool: a skipped repeat came
+    // straight back because nothing else carried its syllable):
+    //  1. Sentences this user skipped or reported stay out, so "skip" means
+    //     "not this one again". Skipped ones are re-admitted only when nothing
+    //     else is left; reported ones never (admin decides those).
+    //  2. Candidates are the least-recently-assigned ones, so repeats cycle
+    //     through the whole pool oldest-first instead of re-serving whatever
+    //     happens to score best on coverage today.
+    candidates = repeatCandidates(userId, targets, ["skipped", "reported"]);
+    if (candidates.length === 0) candidates = repeatCandidates(userId, targets, ["reported"]);
   }
   if (candidates.length === 0) return null;
 
   const best = pickByCoverage(userId, candidates);
   if (best === null) return null;
   return createAssignment(userId, best);
+}
+
+/** Repeat-mode candidates: active sentences carrying any target syllable,
+ *  minus those this user resolved with one of `excludeStatuses`, ordered by
+ *  when this user was last assigned them (never-assigned first, then oldest). */
+function repeatCandidates(userId: number, targets: string[], excludeStatuses: string[]): number[] {
+  const targetPh = targets.map(() => "?").join(",");
+  const statusPh = excludeStatuses.map(() => "?").join(",");
+  return db
+    .prepare(
+      `SELECT ss.sentence_id
+       FROM sentence_syllables ss
+       JOIN sentences s ON s.id = ss.sentence_id AND s.active = 1
+       WHERE ss.syllable IN (${targetPh})
+         AND ss.sentence_id NOT IN (
+           SELECT sentence_id FROM assignments
+           WHERE user_id = ? AND status IN (${statusPh}))
+       GROUP BY ss.sentence_id
+       ORDER BY (SELECT MAX(a.created_at) FROM assignments a
+                 WHERE a.user_id = ? AND a.sentence_id = ss.sentence_id) ASC
+       LIMIT ${CANDIDATE_LIMIT}`,
+    )
+    .all(...targets, userId, ...excludeStatuses, userId)
+    .map((r) => (r as { sentence_id: number }).sentence_id);
 }
 
 /** Among candidate sentence ids, the one with the best coverage gain for this
