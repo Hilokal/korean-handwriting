@@ -91,6 +91,23 @@ lever for further quality is simply more collected data.
 
 ## License
 
-_TODO: add a license before publishing._ (This project was originally scaffolded
-from a pen-SDK sample; all sample code has been removed, but pick a license that
-suits how you want the work used.)
+- **Code** (everything in this repository except the files below): [MIT](LICENSE).
+- **Training data** (the handwriting recordings and their transcripts) and
+  **model weights** (`handwriting-generation/best_model*.pt`,
+  `demo-app/public/model/`): [Creative Commons Attribution-ShareAlike 4.0](https://creativecommons.org/licenses/by-sa/4.0/)
+  (CC BY-SA 4.0).
+
+CC BY-SA 4.0 is the licence of Korean Wikipedia, which supplied roughly half of
+the transcribed sentences (the `source` field of each sentence names the
+article). The rest of the sentences were generated synthetically. Releasing
+the whole dataset and the weights trained on it under the same licence keeps
+the share-alike obligation satisfied and keeps the terms uniform: anyone may
+use, adapt, and redistribute the data and weights, including commercially,
+provided they credit this project (and, for the Wikipedia sentences,
+Wikipedia) and release adaptations under the same licence.
+
+When using the data or weights, please attribute as:
+
+> Korean handwriting stroke dataset by Jonathan Baudanza, handwriting by
+> [writer credit], CC BY-SA 4.0. Transcripts partly from Korean Wikipedia
+> (CC BY-SA 4.0).
