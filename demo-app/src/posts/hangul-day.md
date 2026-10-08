@@ -72,7 +72,7 @@ At first, I started training with text data that I sourced from Wikipedia. I wan
 
 From that point on, I decided to generate synthetic data from Claude. After each training run, I would identify specific holes in the model, and then create more synthetic data for Jo to write. This worked well. Jo also found it more enjoyable. If I was starting again, I might go the straight synthetic route, rather than bootstrapping with Wikipedia text.
 
-I've published all the training data here: [TODO: link to Hugging Face dataset]
+I've published all the training data on Hugging Face: [jbaudanza/korean-handwriting-strokes](https://huggingface.co/datasets/jbaudanza/korean-handwriting-strokes). It's released under CC BY-SA 4.0, so you're free to use it for your own models, art, or teaching.
 
 ## Future Plans
 
