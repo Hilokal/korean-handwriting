@@ -58,7 +58,7 @@ In 2013, Alex Graves introduced a type of attention that monotonically sweeps ac
 
 Graves' model was trained on 22,000 lines of English text. I was not able to find any comparable data source for Hangul, so I had to create my own.
 
-I trained this model on about 4,000 lines of handwritten text that I collected from a Neo Smartpen, all done by a single writer that I hired on soomgo.com.
+I trained this model on about 4,000 lines of handwritten text that I collected from a Neo Smartpen, all done by a single writer, Jo YW, whom I hired on soomgo.com. Every stroke you see in the demo is the model's imitation of his hand.
 
 I chose the Neo Smartpen for several reasons.
 
@@ -70,7 +70,7 @@ As the writer uses the Smartpen, the device feeds data to the Chrome window. It 
 
 At first, I started training with text data that I sourced from Wikipedia. I wanted to start with natural data that was unambiguously unencumbered by copyright. This worked well enough for me to train a proof-of-concept of the model, however, I noticed the model had many holes. For example, any sentence that ended with a 요 (a spoken, polite ending) would tend to hallucinate. This makes sense, because Wikipedia is written using the neutral dictionary form, and almost never ends a sentence with 요.
 
-From that point on, I decided to generate synthetic data from Claude. After each training run, I would identify specific holes in the model, and then create more synthetic data for my Soomgo worker to write. This worked well. My Soomgo worker also found it more enjoyable. If I was starting again, I might go the straight synthetic route, rather than bootstrapping with Wikipedia text.
+From that point on, I decided to generate synthetic data from Claude. After each training run, I would identify specific holes in the model, and then create more synthetic data for Jo to write. This worked well. Jo also found it more enjoyable. If I was starting again, I might go the straight synthetic route, rather than bootstrapping with Wikipedia text.
 
 I've published all the training data here: [TODO: link to Hugging Face dataset]
 

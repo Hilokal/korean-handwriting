@@ -109,5 +109,5 @@ Wikipedia) and release adaptations under the same licence.
 When using the data or weights, please attribute as:
 
 > Korean handwriting stroke dataset by Jonathan Baudanza, handwriting by
-> [writer credit], CC BY-SA 4.0. Transcripts partly from Korean Wikipedia
+> Jo YW, CC BY-SA 4.0. Transcripts partly from Korean Wikipedia
 > (CC BY-SA 4.0).

@@ -37,6 +37,7 @@ OUT_DIR = HERE / ".." / "data" / "hf-dataset"
 
 PEN_MOVE = 1
 WRITER_ID = 1  # the single writer behind every published recording (export userId 2)
+WRITER_CREDIT = "Jo YW"  # credited by name at the writer's request
 GITHUB_URL = "https://github.com/Hilokal/korean-handwriting"
 DEMO_URL = "https://hangul.ink"
 
@@ -228,8 +229,8 @@ is at [{GITHUB_URL.removeprefix("https://")}]({GITHUB_URL}).
 | Recording time | {st["hours"]:.1f} h |
 | Writers | 1 |
 
-All recordings are by a single writer, a native Korean speaker hired for the
-project, writing with a Neo Smartpen on Ncode paper. The pen streams at roughly
+All recordings are by a single writer, **{WRITER_CREDIT}**, a native Korean
+speaker who wrote every line for this project with a Neo Smartpen on Ncode paper. The pen streams at roughly
 50 samples per second.
 
 ## Format
@@ -306,10 +307,11 @@ The dataset is released under **CC BY-SA 4.0**.
   this project.
 
 Please attribute as: *Korean Handwriting Strokes by Jonathan Baudanza
-(hangul.ink), CC BY-SA 4.0; transcripts partly from Korean Wikipedia (CC BY-SA 4.0).*
+(hangul.ink), handwriting by {WRITER_CREDIT}, CC BY-SA 4.0; transcripts partly
+from Korean Wikipedia (CC BY-SA 4.0).*
 
-Use for education, art, research, and products is welcome. The writer agreed
-to this public release.
+Use for education, art, research, and products is welcome. {WRITER_CREDIT}
+agreed to this public release and to being credited by name.
 """
 
 
