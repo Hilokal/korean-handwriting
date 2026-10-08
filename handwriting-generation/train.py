@@ -126,6 +126,17 @@ def compute_losses(
     return xy_loss, pen_loss
 
 
+# GRAD_CLIP: max gradient norm. 1.0 since the initial commit; the 2026-08-17 h256
+# run hit a large MDN loss spike *with* 1.0, so wide-model A/Bs may lower it.
+GRAD_CLIP = float(os.environ.get("GRAD_CLIP", "1.0"))
+
+# The fused upper-layer GRU (model.py _forward_fused) runs through cuDNN, whose
+# RNN kernels use TF32 matmuls by default on Ampere+ -- a ~0.6% gradient
+# perturbation vs the fp32 per-step loop, for no speed gain (the run is
+# launch-bound). Keep the two paths numerically interchangeable.
+torch.backends.cudnn.allow_tf32 = False
+
+
 def train_epoch(
     model: HandwritingRNN,
     dataloader: DataLoader[HandwritingData],
@@ -158,7 +169,7 @@ def train_epoch(
 
         # Backward pass
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP)
         optimizer.step()
 
         total_loss += loss.item()
@@ -311,6 +322,7 @@ def main():
     if onehot:
         print("One-hot conditioning (ONEHOT=1): frozen identity tables, window_dim=76")
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"Grad clip max_norm: {GRAD_CLIP}")
 
     # Loss functions. XY uses the MDN NLL (see compute_losses); pen is a masked
     # binary cross-entropy over the end-of-stroke flag. pos_weight upweights the

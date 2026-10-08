@@ -417,6 +417,8 @@ class GRUWithSlidingAttention(nn.Module):
         self.num_layers = num_layers
         self.sliding_window_k = sliding_window_k
         self.window_dim = window_dim
+        # Run layers 1..L-1 with the fused sequence GRU kernel (see _forward_fused).
+        self.fused_upper = True
 
         # Layer 0 input is [x_t, w]; higher layers also get the input skip and the
         # layer below: [x_t, h_below, w].
@@ -484,6 +486,9 @@ class GRUWithSlidingAttention(nn.Module):
         # so phi is also evaluated at u = U for Graves' termination test.
         u = torch.arange(U + 1, device=device).view(1, 1, U + 1)  # (1, 1, U+1)
 
+        if self.fused_upper and self.num_layers > 1:
+            return self._forward_fused(x_seq, c, c_mask, hidden, w, kappa, u)
+
         outputs = []
         phis = []
 
@@ -524,3 +529,62 @@ class GRUWithSlidingAttention(nn.Module):
         output = torch.stack(outputs, dim=1)  # (B, S, hidden * num_layers)
         phi_seq = torch.stack(phis, dim=1)  # (B, S, U+1)
         return output, (hidden, w, kappa), phi_seq
+
+    def _forward_fused(self, x_seq, c, c_mask, hidden, w, kappa, u):
+        """Same math as the per-step loop above, ~half the kernel launches.
+
+        Only layer 0 is coupled to the attention window (the window is computed
+        from layer 0's hidden state and fed back into layer 0's next input).
+        Layers 1..L-1 consume [x_t, h_below_t, w_t], all of which are known for
+        the whole sequence once layer 0 has run -- so they are plain GRUs over a
+        known input and can use the fused cuDNN/MPS sequence kernel. The weights
+        are the very same nn.GRUCell parameters (identical gate equations and
+        layout), so checkpoints, generate() and the ONNX single-step export are
+        untouched. Set ``fused_upper = False`` to run the reference loop.
+        """
+        U = c.size(1)
+        S = x_seq.size(1)
+        h = hidden[0]
+        h0_seq, w_seq, phis = [], [], []
+        for t in range(S):
+            x_t = x_seq[:, t]
+            h = self.layers[0](torch.cat([x_t, w], dim=-1), h)
+            alpha = torch.exp(self.alpha_head(h)).unsqueeze(-1)
+            beta = torch.exp(self.beta_head(h)).unsqueeze(-1)
+            kappa = kappa + torch.exp(self.kappa_head(h))
+            phi = (alpha * torch.exp(-beta * (kappa.unsqueeze(-1) - u) ** 2)).sum(1)
+            phi_real = phi[:, :U] * c_mask
+            w = torch.bmm(phi_real.unsqueeze(1), c).squeeze(1)
+            h0_seq.append(h)
+            w_seq.append(w)
+            phis.append(torch.cat([phi_real, phi[:, U:]], dim=-1))
+        h0_seq = torch.stack(h0_seq, dim=1)  # (B, S, H)
+        w_seq = torch.stack(w_seq, dim=1)  # (B, S, window_dim)
+
+        layer_out = [h0_seq]
+        final_hidden = [h]
+        below = h0_seq
+        for i in range(1, self.num_layers):
+            cell = self.layers[i]
+            layer_in = torch.cat([x_seq, self.dropout(below), w_seq], dim=-1)
+            out, h_n = torch._VF.gru(
+                layer_in,
+                hidden[i].unsqueeze(0).contiguous(),
+                [cell.weight_ih, cell.weight_hh, cell.bias_ih, cell.bias_hh],
+                True,  # has_biases
+                1,  # num_layers
+                0.0,  # inter-layer dropout (none: one layer per call)
+                # cuDNN's train flag only gates that (zero) dropout and whether it keeps
+                # the workspace a backward pass needs -- so key it to autograd, not
+                # module mode (eval-mode backward is legal in the reference loop too).
+                torch.is_grad_enabled(),
+                False,  # bidirectional
+                True,  # batch_first
+            )
+            layer_out.append(out)
+            final_hidden.append(h_n[0])
+            below = out
+
+        output = torch.cat(layer_out, dim=-1)  # (B, S, hidden * num_layers)
+        phi_seq = torch.stack(phis, dim=1)  # (B, S, U+1)
+        return output, (torch.stack(final_hidden, dim=0), w, kappa), phi_seq
