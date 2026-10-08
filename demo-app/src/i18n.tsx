@@ -11,8 +11,6 @@ import {
 
 const strings = {
   en: {
-    title: "hangul.ink",
-    tagline: "A neural network writes Korean by hand — live in your browser.",
     about:
       "A recurrent network trained on real pen recordings draws each stroke, one point at a time. Nothing is sent to a server — the model runs right here.",
     inputLabel: "Korean text",
@@ -52,8 +50,6 @@ const strings = {
       `${points} points in ${Math.round(ms)} ms`,
   },
   ko: {
-    title: "hangul.ink",
-    tagline: "신경망이 브라우저에서 실시간으로 한글 손글씨를 씁니다.",
     about:
       "실제 펜 기록으로 학습된 순환 신경망이 한 점씩 획을 그립니다. 서버로 전송되는 것 없이 모델이 바로 여기서 실행됩니다.",
     inputLabel: "한글 텍스트",

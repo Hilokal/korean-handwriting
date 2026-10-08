@@ -23,9 +23,9 @@ body {
 }
 
 .page {
-  max-width: 860px;
+  max-width: 720px;
   margin: 0 auto;
-  padding: 24px 20px 40px;
+  padding: 20px 20px 40px;
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -40,23 +40,99 @@ header {
   flex-wrap: wrap;
 }
 
-h1 {
-  margin: 0;
-  font-size: 1.9rem;
-  letter-spacing: -0.02em;
+header {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
 }
 
-.tagline {
-  margin: 2px 0 0;
-  color: var(--muted);
-  font-size: 0.95rem;
+.brand {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.brand-dot {
+  color: var(--accent);
 }
 
 nav {
   display: flex;
   gap: 14px;
   align-items: center;
-  padding-top: 8px;
+}
+
+article {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.post-title {
+  margin: 12px 0 0;
+  font-size: 2.1rem;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.byline {
+  margin: -8px 0 4px;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+/* Post body (rendered markdown) */
+.prose {
+  font-size: 1.08rem;
+  line-height: 1.65;
+}
+
+.prose > :first-child {
+  margin-top: 0;
+}
+
+.prose > :last-child {
+  margin-bottom: 0;
+}
+
+.prose p {
+  margin: 0 0 1.1em;
+}
+
+.prose h2 {
+  font-size: 1.5rem;
+  letter-spacing: -0.015em;
+  margin: 2em 0 0.6em;
+}
+
+.prose h3 {
+  font-size: 1.15rem;
+  margin: 1.6em 0 0.5em;
+}
+
+.prose a {
+  color: var(--accent);
+}
+
+.prose code {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 1.4em;
+}
+
+.demo {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 8px 0 20px;
 }
 
 main {
@@ -257,7 +333,7 @@ button {
 .about {
   color: var(--muted);
   font-size: 0.9rem;
-  margin: 4px 2px;
+  margin: 0 2px;
 }
 
 footer {
@@ -331,7 +407,10 @@ code {
   .pen-canvas {
     height: 170px;
   }
-  h1 {
-    font-size: 1.5rem;
+  .post-title {
+    font-size: 1.6rem;
+  }
+  .prose {
+    font-size: 1rem;
   }
 }

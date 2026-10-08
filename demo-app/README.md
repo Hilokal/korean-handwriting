@@ -1,7 +1,7 @@
 # demo-app — hangul.ink
 
-Public demo site for the Korean handwriting model. The **model runs entirely in
-the browser**: the single-step ONNX export of the GRU (1.3 MB) is driven by a
+Public site for the Korean handwriting model: a blog post with the live demo
+embedded mid-article. The **model runs entirely in the browser**: the single-step ONNX export of the GRU (1.3 MB) is driven by a
 TypeScript autoregressive loop (MDN sampling, pen-lift sampling, attention-window
 termination), streaming points into a live pen animation. No inference server.
 
@@ -11,6 +11,19 @@ termination), streaming points into a live pen animation. No inference server.
 - Downloads: self-drawing animated SVG and the raw stroke JSON
 - 👍/👎 feedback posts to the collection app (`/api/feedback`), where the admin
   UI can promote a failed sentence into the writers' assignment pool
+
+## Editing the post
+
+The prose lives in `src/posts/*.md` and is rendered with `marked` at runtime
+(bundled via vite `?raw`, so edits hot-reload in dev):
+
+- `hangul-day.md` — the main post, served at `/`. The line `<!-- demo -->`
+  marks where the interactive demo is inserted; text above it is the intro.
+- `graves-departures.md` — companion post, served at `/graves-departures`.
+
+Titles/dates are in the `POSTS` table in `src/App.tsx`. Routing is a path
+lookup against that table (Cloudflare's SPA fallback serves `index.html` for
+every path), so adding a post is one markdown file plus one table row.
 
 ## Development
 

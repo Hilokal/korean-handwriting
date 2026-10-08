@@ -1,0 +1,109 @@
+Today is October 9, Happy Hangul Day!
+
+If you didn't know, Hangul is the alphabet that is used for the written Korean language. The Hangul alphabet is unique, in that it was created relatively recently, in 1446, and was designed intentionally to be easy to learn.
+
+The Koreans are rightfully very proud of this alphabet. And so October 9 is a national holiday to celebrate Hangul.
+
+To celebrate Hangul Day this year, I am releasing the world's first AI model for generating Hangul handwriting strokes.
+
+You can try this model in your web browser. If you know Korean, you can type some Korean text and the model will generate a sequence of pen strokes to render that text. If you don't know Korean, you can use one of the pre-filled bubbles with some common phrases.
+
+<!-- demo -->
+
+Like most generative models, it includes a random sampling layer, so each generation from the model is unique.
+
+The demo you see here is rendering strokes into an SVG animation, but there's no reason this couldn't also be set up to drive an auto-pen.
+
+## Why?
+
+I get this question a lot.
+
+This project combined two of my interests: generative AI models, and the Korean language.
+
+I have a long career in software development, but I find generative AI models fascinating. As a learning exercise, I wanted to try training my own generative model from scratch. I wanted to make mistakes, fix them, and learn in the process.
+
+And I wanted to create something new. As far as I know, this is the only generative Hangul stroke model that is publicly available.
+
+### How is this different than X?
+
+There are many AI models these days, many of which are capable of creating images, even Hangul images.
+
+The biggest difference is that this model is not generating pixels directly, but is instead generating a sequence of pen strokes. Each item in the sequence contains an x, y coordinate, as well as a pen-up/pen-down instruction. This is why the output looks like an animation, and not a static image.
+
+Also, this model is extremely small. In fact, there is no server. It's running entirely in your browser.
+
+## Architecture
+
+This model's architecture is based on a 2013 paper called ["Generating Sequences With Recurrent Neural Networks"](https://arxiv.org/abs/1308.0850) by Alex Graves. In this paper, Graves makes the case that a recurrent neural network (or RNN) can be used to generate sequences of things. This seems obvious today, but at the time it was quite novel. In his paper, one of the example sequences he uses is handwriting, which is just a sequence of pen strokes.
+
+A recurrent neural network is simply a model that runs in some kind of loop, and maintains some hidden state between each iteration of that loop. This is an old concept, but is still very relevant today.
+
+Recently, you may have heard rumors about OpenAI using a "Looped Transformer" in their new Astra model. This is, in a sense, a type of recurrent neural network.
+
+I won't dive too deep into the details of the RNN architecture that Graves used, because that's already done better elsewhere: Distill's ["Four Experiments in Handwriting with a Neural Network"](https://distill.pub/2016/handwriting/) is a great interactive walkthrough.
+
+I did, however, need to make significant changes to Graves' architecture in order to accommodate Hangul. If you're interested in the details, I've described some of these changes in [a separate post](/graves-departures).
+
+### Handwriting models and Large Language Models
+
+A Large Language Model (LLM) and a handwriting model are very different architectures. However, they have a lot in common. First of all, they are both producing a set of sequences. And in most cases, they are doing this auto-regressively.
+
+Secondly, they both use a form of attention. You have probably heard about the transformer, which was introduced in the 2017 paper ["Attention Is All You Need"](https://arxiv.org/abs/1706.03762). The transformer architecture directs attention across an entire context window of tokens. This allows the forward pass to model a complex relationship between the next token and all the tokens that came before it.
+
+But attention existed as a concept before this 2017 paper. For a handwriting model, a transformer is largely overkill. When generating strokes, we really only care about the current character, and the nearby characters.
+
+In 2013, Alex Graves introduced a type of attention that monotonically sweeps across a text embedding as the model draws text. This is perfect for generating handwriting strokes.
+
+## Training Data
+
+Graves' model was trained on 22,000 lines of English text. I was not able to find any comparable data source for Hangul, so I had to create my own.
+
+I trained this model on about 4,000 lines of handwritten text that I collected from a Neo Smartpen, all done by a single writer that I hired on soomgo.com.
+
+I chose the Neo Smartpen for several reasons.
+
+The Neo Smartpen is created by a Korean company, so it fits spiritually well with this project.
+
+More importantly, though, the Neo Smartpen is very hackable. The company provides an open source JavaScript example app on their GitHub repository that shows how to interact with the pen over the Chrome Bluetooth interface.
+
+As the writer uses the Smartpen, the device feeds data to the Chrome window. It includes the x, y position, the pen pressure, the pen up/down state, and some other attributes that I'll ignore for this post.
+
+At first, I started training with text data that I sourced from Wikipedia. I wanted to start with natural data that was unambiguously unencumbered by copyright. This worked well enough for me to train a proof-of-concept of the model, however, I noticed the model had many holes. For example, any sentence that ended with a 요 (a spoken, polite ending) would tend to hallucinate. This makes sense, because Wikipedia is written using the neutral dictionary form, and almost never ends a sentence with 요.
+
+From that point on, I decided to generate synthetic data from Claude. After each training run, I would identify specific holes in the model, and then create more synthetic data for my Soomgo worker to write. This worked well. My Soomgo worker also found it more enjoyable. If I was starting again, I might go the straight synthetic route, rather than bootstrapping with Wikipedia text.
+
+I've published all the training data here: [TODO: link to Hugging Face dataset]
+
+## Future Plans
+
+I'm probably not going to do much more with this, since I'd like to focus more now on audio models. However, I have some ideas if anyone wants to try something. You're free to use all the [source code](https://github.com/Hilokal/korean-handwriting) and data that I've collected:
+
+### Multiple writers
+
+This model is trained on data from only one writer. If you had data from multiple writers, it opens up more possibilities for model capabilities.
+
+For example, you could train some kind of style-embedding feature. You could perhaps "clone" someone's handwriting, the same way you can clone someone's voice with a text-to-speech model.
+
+### Flow Matching
+
+My model uses something called a mixture density network to predict the next pen stroke. Basically, this means it's predicting several probability density functions, which you can sample from.
+
+However, many state-of-the-art models use a newer technique called "flow matching". Instead of sampling from a PDF, you start with a random point, and then the model predicts a directional vector from this random point. You do this iteratively until you arrive at the final result. This is how most image generation models work.
+
+### Different scripts and alphabets
+
+There are hundreds of active alphabets in the world. I'm particularly interested in Korean, but I encourage anyone to explore modeling different alphabets as well.
+
+### Fused GRU kernel
+
+The GRU loop I use is actually very inefficient. PyTorch already has an optimized `torch.nn.GRU` module, but I don't use it. Instead I use individual `torch.nn.GRUCell` modules and connect them together manually.
+
+Since my training time is usually around 10 hours, I don't care too much about this inefficiency. However, this could be made much more efficient using something like Triton or even just raw CUDA.
+
+### Drive a real mechanical pen
+
+I think it would be fun to hook the output of this model up to a real pen. I'm not sure of the use case, but maybe you're an artist and have some ideas?
+
+### Art collaboration?
+
+Are you a Korean artist that is interested in doing some sort of collaboration? If so, please send me an email.

@@ -24,6 +24,15 @@ try {
   });
 
   await page.goto(url, { waitUntil: "networkidle0" });
+  const title = await page.evaluate(
+    () => document.querySelector(".post-title")?.textContent ?? "",
+  );
+  if (!title.includes("Hangul")) throw new Error(`post title missing: ${title}`);
+  const proseCount = await page.evaluate(
+    () => document.querySelectorAll(".prose").length,
+  );
+  if (proseCount < 2) throw new Error(`expected prose above and below the demo, got ${proseCount}`);
+  console.log(`post rendered: "${title}" (${proseCount} prose blocks)`);
   await page.waitForFunction(
     () => document.querySelector(".status-line")?.textContent?.includes("model"),
     { timeout: 15000 },
@@ -89,8 +98,7 @@ try {
     (nav[0] as HTMLButtonElement).click();
   });
   await page.waitForFunction(
-    () => document.querySelector(".tagline")?.textContent?.includes("한글") ||
-      document.querySelector(".tagline")?.textContent?.includes("신경망"),
+    () => document.querySelector("button.primary")?.textContent?.includes("쓰기"),
     { timeout: 5000 },
   );
   console.log("language toggle OK");
