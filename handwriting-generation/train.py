@@ -160,6 +160,12 @@ def train_epoch(
         inputs = inputs.to(device)
         targets = targets.to(device)
 
+        # CUDA graphs: capture this batch's time-bucket graph (no-op once captured
+        # or when graphs are disabled) before autograd starts recording.
+        ensure = getattr(model.gru, "ensure_graph", None)
+        if ensure is not None:
+            ensure(inputs.shape[1])
+
         optimizer.zero_grad()
 
         xy_loss, pen_loss = compute_losses(
@@ -296,11 +302,18 @@ def main():
         )
     print(f"Train: {len(train_dataset)}, Validation: {len(val_dataset)}")
 
+    # CUDA_GRAPHS=1 (default on CUDA): capture the layer-0 loop as per-bucket CUDA
+    # graphs (model.py enable_cuda_graphs). Graphs need a fixed batch size, so the
+    # training loader drops its short last batch (< batch_size lines per epoch,
+    # reshuffled every epoch). CUDA_GRAPHS=0 restores the eager loop.
+    use_cuda_graphs = device.type == "cuda" and os.environ.get("CUDA_GRAPHS", "1") == "1"
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
         collate_fn=collate_fn,
+        drop_last=use_cuda_graphs,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -323,6 +336,14 @@ def main():
         print("One-hot conditioning (ONEHOT=1): frozen identity tables, window_dim=76")
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"Grad clip max_norm: {GRAD_CLIP}")
+
+    if use_cuda_graphs:
+        u_max = max(item["tokens"].size(0) for item in dataset)
+        model.gru.enable_cuda_graphs(
+            batch_size=batch_size, x_dim=4 + model.abs_pos_dim, u_max=u_max
+        )
+        print(f"CUDA graphs: on (B={batch_size}, U_max={u_max}, 128-step buckets, "
+              f"train loader drop_last)")
 
     # Loss functions. XY uses the MDN NLL (see compute_losses); pen is a masked
     # binary cross-entropy over the end-of-stroke flag. pos_weight upweights the
