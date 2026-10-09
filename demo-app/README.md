@@ -46,6 +46,10 @@ cd ../handwriting-generation
 The `version` field in `model-meta.json` (hash of the ONNX file) is stamped
 into every feedback record, so feedback stays attributable across retrains.
 
+The social share image `public/og.png` is a model-generated sentence rendered
+by `scripts/og-image.ts` (seed 2 of "한글날 축하합니다!"); regenerate with
+`npm run og-image` after a retrain if you want it to match the live model.
+
 Headless smoke test of the whole generation stack (no browser needed):
 
 ```bash

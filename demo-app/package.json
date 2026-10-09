@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test:smoke": "tsx scripts/smoke.ts",
     "test:browser": "tsx scripts/browser-test.ts",
+    "og-image": "tsx scripts/og-image.ts",
     "deploy": "npm run build && npx wrangler deploy"
   },
   "dependencies": {
