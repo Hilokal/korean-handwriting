@@ -34,7 +34,7 @@ pressure.
 | `test_onnx_parity.py` | Two-way parity check over a 200-step stateful rollout: wrapper vs `model.forward` (catches wrapper drift) and ONNX Runtime vs wrapper (catches export bugs). Must print `PARITY OK`. |
 | `download_export.sh` | Downloads all recordings from the production collection app into `../data/export/` via the admin export endpoint. Secure password prompt; re-run to refresh. |
 | `fetch_reference_texts.py` | Fetches clean Hangul sentences from Korean Wikipedia into `../data/reference-texts/` (per-page `.txt` + `all.jsonl`, gitignored). Filters to pure-Hangul sentences and reports jamo/syllable coverage. Supports `--featured`/`--good`/`--category` bulk fetching, `--resume`, and authenticated fetching via `WIKI_USERNAME`/`WIKI_BOT_PASSWORD` env vars (bot password; anonymous requests get heavily rate-limited). |
-| `best_model.eot.pt` | The bundled trained model (3-layer, hidden 128, embedding_size 8, pressure + EOT/tail — the 2026-09-06 batchim2 retrain on 2,443 lines incl. the completed 받침-saturation batch; see progress #15). Load with `NUM_LAYERS=3 EMBEDDING_SIZE=8`. Training writes new checkpoints to `best_model.pt` (gitignored). `best_model.pressure.pt` / `best_model.emb8.pt` are older bundled models, historical only; they no longer load. |
+| `best_model.eot.pt` | The bundled trained model (3-layer, hidden 128, embedding_size 8, pressure + EOT/tail — the 2026-10-07 retrain on 4,454 lines incl. the 600-sentence thin-syllable batch; see progress #16). Load with `NUM_LAYERS=3 EMBEDDING_SIZE=8`. Training writes new checkpoints to `best_model.pt` (gitignored). `best_model.pressure.pt` / `best_model.emb8.pt` are older bundled models, historical only; they no longer load. |
 | `babysit_pod_training.sh` | Watches a RunPod training run; on completion (or crash) pulls `best_model.pt` + `checkpoint.pt` + the log into `runs/<date>-<pod>/`, then deletes the pod (only if the pull verifiably succeeded). Run detached under `nohup caffeinate -i` for overnight runs. |
 
 ## Data
@@ -593,6 +593,40 @@ Fixes landed, in order:
     co-adaptation). Second worker (userId 4, 김여울, 340 lines) now exists —
     writer-conditioning becomes feasible; exports filter to u2 via `.env`
     `USER_ID=2`.
+
+16. **4,454-line retrain + promotion (2026-10-07/09) + 8x training speedup.**
+    u2 had exhausted the sentence pool (assignment fell into its repeat
+    fallback; fixed in collection-app b2939d1) and a 600-line Claude-generated
+    thin-syllable batch (`generate_sentences.py`, `curated/thin-2026-09.jsonl`)
+    was imported at priority 1 on 09-26. Export 4,454 lines (+82% over #15),
+    3,568/886 split. Champion recipe on RunPod (no Ryzen 4090s in stock; RTX
+    PRO 4500 Blackwell on an EPYC 7443 won a 4-pod CPU lottery, $0.72/h):
+    early-stopped at epoch 834 after 34h39m (~$25) — slow 0.006-nat drifts
+    kept re-arming the anchor; best val **−5.1121**. **Exact-split A/B vs the
+    #15 champion** (`eval_models.py` run on the pod): full val +0.107 nats;
+    **leak-free 234 lines +0.297** (thin-synthetic +0.352, Wikipedia +0.252);
+    on the 652 val lines the champion had trained on only +0.051 — the
+    memorization tell again. Pen 0.205→0.178 leak-free. Same-seed renders
+    (bias 0.75): 닮 and 꾸(ㄲ) fixed, everything else equal-or-cleaner,
+    acceptance 42/7/99 clean (`runs/2026-10-07-retrain/renders/`). Promoted
+    as `best_model.eot.pt`, ONNX re-export PARITY OK (1.5e-5), model version
+    `746ddd1a3806`, demo smoke + browser tests green.
+    **Training speedup (f5aa64e, 48670f6):** the per-timestep loop was
+    launch-bound (GPU 10-17%, one core at 100%, so epoch time tracked the
+    host CPU). Only layer 0 is coupled to the window, so layers 1..L-1 now run
+    through cuDNN (`torch._VF.gru` on the same GRUCell params, 1.7x) and the
+    layer-0 loop is captured per 128-step bucket as a CUDA graph
+    (`enable_cuda_graphs`/`ensure_graph`, `CUDA_GRAPHS=1` default; 0.24s vs
+    2.21s fwd+bwd/batch, gradients bitwise identical; 152s → ~18s/epoch at
+    h128). cuDNN TF32 is forced off (0.6% gradient drift for no gain).
+    Generation/ONNX/val keep the eager loop. **NaN fix (06305c0):** the h256
+    A/B went NaN between two healthy epochs — unclamped `log_sigma` let a
+    component collapse (sigma→0 → inf/0/0 → NaN grad norm → NaN weights;
+    the 08-17 spike was the same hole). `mdn_loss` now floors log_sigma at
+    `LOG_SIGMA_MIN=-7` and selects masked steps with `torch.where`
+    (0·inf=NaN); `train_epoch` skips non-finite steps. Loss unchanged on
+    normal batches. h256 A/B (dropout 0.3, clip 0.5) relaunched 10-09 on the
+    same export/split — compare its val to −5.1121 directly.
 
 **Still open:**
 - **Within-stroke taper in the animated download SVG** — the live canvas now
