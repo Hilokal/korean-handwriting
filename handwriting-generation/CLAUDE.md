@@ -627,6 +627,20 @@ Fixes landed, in order:
     (0·inf=NaN); `train_epoch` skips non-finite steps. Loss unchanged on
     normal batches. h256 A/B (dropout 0.3, clip 0.5) relaunched 10-09 on the
     same export/split — compare its val to −5.1121 directly.
+    **h256 A/B result (2026-10-09): LOST, third time.** Same export/split,
+    `HIDDEN_SIZE=256 DROPOUT=0.3 GRAD_CLIP=0.5`, CUDA graphs ~21s/epoch:
+    early-stopped at epoch 375 (2h10m, ~$1.60, no NaN, no skipped steps),
+    best val **−4.9993** vs h128's **−5.1121** — 0.113 nats worse, a fair
+    number-to-number comparison. Classic overfit: train ran to −5.36 (0.38
+    gap vs h128's 0.04), pen *degraded* from 0.25 to 0.27 while h128 sat at
+    0.19. It reached −4.98 by epoch ~200 (h128 needed ~400) and then had
+    nowhere to go. Width penalty by data size: −0.31 @1.5k, −0.076 @2.0k,
+    −0.113 @4.5k lines — so doubling the corpus did NOT keep closing the gap;
+    the 08-21 diagnosis stands (the extra parameters sit on the window-input
+    columns that dropout never touches). Width is off the table until
+    window-path regularization (dropout on `w`, weight decay on window
+    columns, or Graves adaptive weight noise) exists. Artifacts in
+    `runs/2026-10-09-h256/` (load with `HIDDEN_SIZE=256`), gitignored.
 
 **Still open:**
 - **Within-stroke taper in the animated download SVG** — the live canvas now
