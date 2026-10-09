@@ -10,6 +10,7 @@ import hangulDayMd from "./posts/hangul-day.md?raw";
 import { AUTHOR, BLOG_INDEX, Lang, POSTS, PostMeta } from "./routes";
 
 const GITHUB_URL = "https://github.com/Hilokal/korean-handwriting";
+const DATASET_URL = "https://huggingface.co/datasets/jbaudanza/korean-handwriting-strokes";
 
 // Posts are authored in markdown, one file per language; `<!-- demo -->`
 // marks where the live demo is embedded (the article stays self-contained
@@ -101,6 +102,14 @@ export default function App() {
             rel="noreferrer"
           >
             GitHub ↗
+          </a>
+          <a
+            className="link-button"
+            href={DATASET_URL}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Hugging Face ↗
           </a>
           <LangToggle />
         </nav>
