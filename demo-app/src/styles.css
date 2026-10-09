@@ -128,6 +128,82 @@ article {
   padding-left: 1.4em;
 }
 
+.home {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.home-title {
+  margin: 12px 0 0;
+  font-size: 2.1rem;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.lede {
+  margin: 0;
+  font-size: 1.12rem;
+  line-height: 1.6;
+}
+
+.read-more {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+  margin-top: 8px;
+}
+
+.read-more h2 {
+  margin: 0 0 6px;
+  font-size: 1.3rem;
+  letter-spacing: -0.015em;
+}
+
+.read-more p {
+  margin: 0 0 10px;
+  line-height: 1.6;
+}
+
+.read-more-links {
+  display: flex;
+  gap: 22px;
+  flex-wrap: wrap;
+}
+
+.read-more-links a,
+.blog-index a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.read-more-links a:hover,
+.blog-index a:hover {
+  text-decoration: underline;
+}
+
+.blog-index ul {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.blog-index li a {
+  font-size: 1.25rem;
+}
+
+.blog-index li .byline {
+  display: block;
+  margin: 2px 0 4px;
+}
+
+.blog-index li p {
+  margin: 0;
+}
+
 .demo {
   display: flex;
   flex-direction: column;
@@ -407,7 +483,8 @@ code {
   .pen-canvas {
     height: 170px;
   }
-  .post-title {
+  .post-title,
+  .home-title {
     font-size: 1.6rem;
   }
   .prose {

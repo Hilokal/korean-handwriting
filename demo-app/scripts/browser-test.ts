@@ -24,15 +24,19 @@ try {
   });
 
   await page.goto(url, { waitUntil: "networkidle0" });
-  const title = await page.evaluate(
-    () => document.querySelector(".post-title")?.textContent ?? "",
+  const homeTitle = await page.evaluate(
+    () => document.querySelector(".home-title")?.textContent ?? "",
   );
-  if (!title.includes("Hangul")) throw new Error(`post title missing: ${title}`);
-  const proseCount = await page.evaluate(
-    () => document.querySelectorAll(".prose").length,
+  if (!homeTitle.includes("Hangul")) throw new Error(`home title missing: ${homeTitle}`);
+  const postLinks = await page.evaluate(() =>
+    Array.from(document.querySelectorAll(".read-more-links a")).map((a) =>
+      a.getAttribute("href"),
+    ),
   );
-  if (proseCount < 2) throw new Error(`expected prose above and below the demo, got ${proseCount}`);
-  console.log(`post rendered: "${title}" (${proseCount} prose blocks)`);
+  if (!postLinks.includes("/blog/hangul-day")) {
+    throw new Error(`home should link the post, got ${JSON.stringify(postLinks)}`);
+  }
+  console.log(`home rendered: "${homeTitle}", links ${postLinks.join(" ")}`);
   await page.waitForFunction(
     () => document.querySelector(".status-line")?.textContent?.includes("model"),
     { timeout: 15000 },
@@ -94,8 +98,10 @@ try {
 
   // Language toggle flips to Korean.
   await page.evaluate(() => {
-    const nav = document.querySelectorAll("nav .link-button");
-    (nav[0] as HTMLButtonElement).click();
+    const btn = Array.from(document.querySelectorAll("nav button")).find((b) =>
+      b.textContent?.includes("한국어"),
+    );
+    (btn as HTMLButtonElement).click();
   });
   await page.waitForFunction(
     () => document.querySelector("button.primary")?.textContent?.includes("쓰기"),
@@ -106,6 +112,24 @@ try {
   await page.screenshot({
     path: `${process.env.SCRATCH ?? "/tmp"}/app-generated.png`,
   });
+
+  // The post page: article around the embedded demo, with its own meta.
+  await page.goto(`${url}/blog/hangul-day`, { waitUntil: "networkidle0" });
+  const post = await page.evaluate(() => ({
+    title: document.querySelector(".post-title")?.textContent ?? "",
+    prose: document.querySelectorAll(".prose").length,
+    demo: !!document.querySelector(".demo"),
+    ogType: document
+      .querySelector('meta[property="og:type"]')
+      ?.getAttribute("content"),
+    docTitle: document.title,
+  }));
+  if (!post.title.includes("Hangul")) throw new Error(`post title missing: ${post.title}`);
+  if (post.prose < 2 || !post.demo) throw new Error(`post layout wrong: ${JSON.stringify(post)}`);
+  if (post.ogType !== "article" || !post.docTitle.startsWith("A neural network")) {
+    throw new Error(`post meta not prerendered: ${JSON.stringify(post)}`);
+  }
+  console.log(`post rendered: "${post.title}" (${post.prose} prose blocks, og:type=${post.ogType})`);
 
   if (errors.length) {
     console.error("console errors:", errors);

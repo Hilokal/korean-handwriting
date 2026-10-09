@@ -1,56 +1,79 @@
 import { useState } from "react";
-import Demo from "./components/Demo";
+import Home from "./components/Home";
 import Markdown from "./components/Markdown";
-import { LangToggle } from "./i18n";
+import Demo from "./components/Demo";
+import { LangToggle, useI18n } from "./i18n";
 import departuresMd from "./posts/graves-departures.md?raw";
 import hangulDayMd from "./posts/hangul-day.md?raw";
+import { AUTHOR, BLOG_INDEX, POSTS, PostMeta } from "./routes";
 
 const GITHUB_URL = "https://github.com/Hilokal/korean-handwriting";
-const AUTHOR = "Jonathan Baudanza";
 
-// The post is authored in markdown; `<!-- demo -->` marks where the live
-// demo is embedded. Everything above it is the intro, everything below the
-// write-up.
+// Posts are authored in markdown; `<!-- demo -->` marks where the live demo
+// is embedded (the article stays self-contained for readers who land on it).
 const DEMO_MARKER = "<!-- demo -->";
+const MARKDOWN: Record<string, string> = {
+  "/blog/hangul-day": hangulDayMd,
+  "/blog/graves-departures": departuresMd,
+};
 
-interface Post {
-  path: string;
-  title: string;
-  date: string; // ISO, for <time>
-  dateLabel: string;
-  markdown: string;
+function currentPath(): string {
+  return window.location.pathname.replace(/\/+$/, "") || "/";
 }
 
-const POSTS: Post[] = [
-  {
-    path: "/",
-    title: "A neural network that writes Hangul by hand",
-    date: "2026-10-09",
-    dateLabel: "October 9, 2026",
-    markdown: hangulDayMd,
-  },
-  {
-    path: "/graves-departures",
-    title: "Departures from the Graves handwriting model",
-    date: "2026-10-09",
-    dateLabel: "October 9, 2026",
-    markdown: departuresMd,
-  },
-];
+function Post({
+  post,
+  onModelLoaded,
+}: {
+  post: PostMeta;
+  onModelLoaded: (v: string) => void;
+}) {
+  const md = MARKDOWN[post.path] ?? "";
+  const at = md.indexOf(DEMO_MARKER);
+  const intro = at >= 0 ? md.slice(0, at) : md;
+  const body = at >= 0 ? md.slice(at + DEMO_MARKER.length) : "";
+  return (
+    <article>
+      <h1 className="post-title">{post.heading}</h1>
+      <p className="byline">
+        {AUTHOR} · <time dateTime={post.date}>{post.dateLabel}</time>
+      </p>
+      <Markdown source={intro} />
+      {at >= 0 && <Demo onModelLoaded={onModelLoaded} />}
+      {body && <Markdown source={body} />}
+    </article>
+  );
+}
 
-function currentPost(): Post {
-  const path = window.location.pathname.replace(/\/+$/, "") || "/";
-  return POSTS.find((p) => p.path === path) ?? POSTS[0];
+function BlogIndex() {
+  return (
+    <section className="blog-index">
+      <h1 className="post-title">Blog</h1>
+      <ul>
+        {POSTS.map((p) => (
+          <li key={p.path}>
+            <a href={p.path}>{p.heading}</a>
+            <span className="byline">
+              <time dateTime={p.date}>{p.dateLabel}</time>
+            </span>
+            <p>{p.blurb}</p>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
 }
 
 export default function App() {
-  const post = currentPost();
+  const { s } = useI18n();
+  const path = currentPath();
   const [modelVersion, setModelVersion] = useState<string | null>(null);
+  const post = POSTS.find((p) => p.path === path);
 
-  const markerAt = post.markdown.indexOf(DEMO_MARKER);
-  const intro = markerAt >= 0 ? post.markdown.slice(0, markerAt) : post.markdown;
-  const body = markerAt >= 0 ? post.markdown.slice(markerAt + DEMO_MARKER.length) : "";
-  const hasDemo = markerAt >= 0;
+  let page;
+  if (post) page = <Post post={post} onModelLoaded={setModelVersion} />;
+  else if (path === BLOG_INDEX.path) page = <BlogIndex />;
+  else page = <Home onModelLoaded={setModelVersion} />;
 
   return (
     <div className="page">
@@ -59,7 +82,9 @@ export default function App() {
           hangul<span className="brand-dot">.</span>ink
         </a>
         <nav>
-          <LangToggle />
+          <a className="link-button" href={BLOG_INDEX.path}>
+            {s.navBlog}
+          </a>
           <a
             className="link-button"
             href={GITHUB_URL}
@@ -68,20 +93,11 @@ export default function App() {
           >
             GitHub ↗
           </a>
+          <LangToggle />
         </nav>
       </header>
 
-      <main>
-        <article>
-          <h1 className="post-title">{post.title}</h1>
-          <p className="byline">
-            {AUTHOR} · <time dateTime={post.date}>{post.dateLabel}</time>
-          </p>
-          <Markdown source={intro} />
-          {hasDemo && <Demo onModelLoaded={setModelVersion} />}
-          {body && <Markdown source={body} />}
-        </article>
-      </main>
+      <main>{page}</main>
 
       <footer>
         <a href={GITHUB_URL} target="_blank" rel="noreferrer">

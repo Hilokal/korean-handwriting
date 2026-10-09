@@ -43,3 +43,6 @@ build/
 # from node_modules at build time)
 demo-app/public/ort/
 demo-app/scripts/smoke-output.svg
+
+# wrangler dev local state (miniflare sqlite)
+demo-app/.wrangler/

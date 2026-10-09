@@ -12,18 +12,25 @@ termination), streaming points into a live pen animation. No inference server.
 - 👍/👎 feedback posts to the collection app (`/api/feedback`), where the admin
   UI can promote a failed sentence into the writers' assignment pool
 
-## Editing the post
+## Pages and posts
 
-The prose lives in `src/posts/*.md` and is rendered with `marked` at runtime
-(bundled via vite `?raw`, so edits hot-reload in dev):
+- `/` — the demo with a short lede and a pointer to the post (`components/Home.tsx`).
+- `/blog` — index of posts.
+- `/blog/hangul-day`, `/blog/graves-departures` — the posts.
 
-- `hangul-day.md` — the main post, served at `/`. The line `<!-- demo -->`
-  marks where the interactive demo is inserted; text above it is the intro.
-- `graves-departures.md` — companion post, served at `/graves-departures`.
+Prose lives in `src/posts/*.md` and is rendered with `marked` at runtime
+(bundled via vite `?raw`, so edits hot-reload in dev). In `hangul-day.md`
+the line `<!-- demo -->` marks where the interactive demo is embedded.
 
-Titles/dates are in the `POSTS` table in `src/App.tsx`. Routing is a path
-lookup against that table (Cloudflare's SPA fallback serves `index.html` for
-every path), so adding a post is one markdown file plus one table row.
+Route metadata (path, title, description, date) is the table in
+`src/routes.ts`; `App.tsx` maps post paths to their markdown. Adding a post
+is one markdown file, one `POSTS` row, and one line in that map.
+
+Link-preview crawlers don't run JS, so the build prerenders one HTML file per
+route (`dist/blog/hangul-day.html`, …) with that route's `<title>` and
+`og:*` tags swapped in — see `prerenderRoutes()` in `vite.config.ts`.
+Cloudflare serves `/blog/hangul-day` from that file directly; every other
+path falls back to `index.html` (SPA mode).
 
 ## Development
 

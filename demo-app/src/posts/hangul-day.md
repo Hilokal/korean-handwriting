@@ -42,7 +42,7 @@ Recent work on ["looped" transformers](https://arxiv.org/abs/2610.07591) feeds a
 
 I won't dive too deep into the details of the RNN architecture that Graves used, because that's already done better elsewhere: Distill's ["Four Experiments in Handwriting with a Neural Network"](https://distill.pub/2016/handwriting/) is a great interactive walkthrough.
 
-I did, however, need to make significant changes to Graves' architecture in order to accommodate Hangul. If you're interested in the details, I've described some of these changes in [a separate post](/graves-departures).
+I did, however, need to make significant changes to Graves' architecture in order to accommodate Hangul. If you're interested in the details, I've described some of these changes in [a separate post](/blog/graves-departures).
 
 ### Handwriting models and Large Language Models
 
