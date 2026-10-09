@@ -19,8 +19,11 @@ termination), streaming points into a live pen animation. No inference server.
 - `/blog/hangul-day`, `/blog/graves-departures` — the posts.
 
 Prose lives in `src/posts/*.md` and is rendered with `marked` at runtime
-(bundled via vite `?raw`, so edits hot-reload in dev). In `hangul-day.md`
-the line `<!-- demo -->` marks where the interactive demo is embedded.
+(bundled via vite `?raw`, so edits hot-reload in dev). Each post has an
+English file (`hangul-day.md`) and a Korean one (`hangul-day.ko.md`); the
+language toggle switches between them. In `hangul-day*.md` the line
+`<!-- demo -->` marks where the interactive demo is embedded. Korean
+headings, dates and blurbs are the `ko` field of each `POSTS` row.
 
 Route metadata (path, title, description, date) is the table in
 `src/routes.ts`; `App.tsx` maps post paths to their markdown. Adding a post

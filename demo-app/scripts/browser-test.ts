@@ -114,6 +114,8 @@ try {
   });
 
   // The post page: article around the embedded demo, with its own meta.
+  // The toggle above persisted "ko"; start this page in English.
+  await page.evaluate(() => localStorage.setItem("lang", "en"));
   await page.goto(`${url}/blog/hangul-day`, { waitUntil: "networkidle0" });
   const post = await page.evaluate(() => ({
     title: document.querySelector(".post-title")?.textContent ?? "",
@@ -130,6 +132,20 @@ try {
     throw new Error(`post meta not prerendered: ${JSON.stringify(post)}`);
   }
   console.log(`post rendered: "${post.title}" (${post.prose} prose blocks, og:type=${post.ogType})`);
+
+  // Toggling the language swaps the article prose, not just the chrome.
+  await page.evaluate(() => {
+    const btn = Array.from(document.querySelectorAll("nav button")).find((b) =>
+      b.textContent?.includes("한국어"),
+    );
+    (btn as HTMLButtonElement).click();
+  });
+  await page.waitForFunction(
+    () => document.querySelector(".post-title")?.textContent?.includes("한글") &&
+      document.querySelector(".prose")?.textContent?.includes("한글날"),
+    { timeout: 5000 },
+  );
+  console.log("korean post OK");
 
   if (errors.length) {
     console.error("console errors:", errors);

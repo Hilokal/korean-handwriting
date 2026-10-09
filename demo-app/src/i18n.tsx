@@ -5,6 +5,7 @@ import {
   useEffect,
   useState,
 } from "react";
+import type { Lang } from "./routes";
 
 // Same pattern as collection-app/client/src/i18n.tsx. Locale is auto-detected
 // from the browser on first visit, then remembered.
@@ -65,7 +66,7 @@ const strings = {
       "한글을 입력하면, 한 사람의 펜 기록으로 학습한 작은 순환 신경망이 획 하나하나 글씨를 씁니다. 모든 것이 브라우저 안에서 실행됩니다. 아래 예문을 눌러 보셔도 좋아요.",
     homeWhyTitle: "왜 만들었나",
     homeWhyBlurb:
-      "2026년 한글날에 공개했습니다. 스마트펜으로 4,500줄의 손글씨를 모은 과정, Alex Graves의 2013년 아키텍처를 한글에 맞게 바꾼 이야기, 그리고 공개 데이터셋에 대해 썼습니다. (영어)",
+      "2026년 한글날에 공개했습니다. 스마트펜으로 4,500줄의 손글씨를 모은 과정, Alex Graves의 2013년 아키텍처를 한글에 맞게 바꾼 이야기, 그리고 공개 데이터셋에 대해 썼습니다.",
     homeReadPost: "글 읽기 →",
     homeReadDepartures: "Graves 모델과 다른 점 →",
     about:
@@ -107,7 +108,7 @@ const strings = {
   },
 } as const;
 
-export type Lang = keyof typeof strings;
+export type { Lang };
 export type Strings = (typeof strings)[Lang];
 
 interface I18n {

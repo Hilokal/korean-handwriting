@@ -2,6 +2,8 @@
 // prerenders one HTML file per route so link previews get per-page meta).
 // Keep this file free of browser-only or `?raw` imports.
 
+export type Lang = "en" | "ko";
+
 export const SITE_URL = "https://hangul.ink";
 export const OG_IMAGE = `${SITE_URL}/og.png`;
 export const AUTHOR = "Jonathan Baudanza";
@@ -19,6 +21,7 @@ export interface PostMeta extends RouteMeta {
   date: string; // ISO
   dateLabel: string;
   blurb: string; // one line for the blog index
+  ko: { heading: string; dateLabel: string; blurb: string };
 }
 
 export const HOME: RouteMeta = {
@@ -48,6 +51,11 @@ export const POSTS: PostMeta[] = [
     dateLabel: "October 9, 2026",
     blurb:
       "Why I built it, how the data was collected, and what I'd try next.",
+    ko: {
+      heading: "손글씨로 한글을 쓰는 신경망",
+      dateLabel: "2026년 10월 9일",
+      blurb: "왜 만들었는지, 데이터를 어떻게 모았는지, 다음에 해 볼 만한 것들.",
+    },
   },
   {
     path: "/blog/graves-departures",
@@ -59,6 +67,11 @@ export const POSTS: PostMeta[] = [
     date: "2026-10-09",
     dateLabel: "October 9, 2026",
     blurb: "The architecture changes it took to make Graves' model write Hangul.",
+    ko: {
+      heading: "Graves 손글씨 모델과 달라진 점",
+      dateLabel: "2026년 10월 9일",
+      blurb: "Graves의 모델이 한글을 쓰게 만들기까지 바꾼 아키텍처.",
+    },
   },
 ];
 
