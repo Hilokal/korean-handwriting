@@ -19,8 +19,12 @@ try {
   await page.setViewport({ width: 1100, height: 900 });
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
+  // The Cloudflare Web Analytics beacon can't post from a localhost origin
+  // (CORS), which logs two errors per page; not a failure of the app.
+  const beaconNoise = (t: string) =>
+    t.includes("cloudflareinsights.com") || t === "Failed to load resource: net::ERR_FAILED";
   page.on("console", (m) => {
-    if (m.type() === "error") errors.push(m.text());
+    if (m.type() === "error" && !beaconNoise(m.text())) errors.push(m.text());
   });
 
   await page.goto(url, { waitUntil: "networkidle0" });

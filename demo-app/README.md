@@ -93,8 +93,11 @@ pick up the endpoint + `demo_feedback` migration (`fly deploy`).
 
 ## Notes
 
-- `public/ort/` is generated at build time (wasm runtime copied from
-  `node_modules/onnxruntime-web`) and gitignored.
+- `public/ort/<onnxruntime-web version>/` is generated at build time (wasm
+  runtime copied from `node_modules/onnxruntime-web`) and gitignored. The
+  version in the path lets `public/_headers` mark it immutable, alongside
+  the vite-hashed bundles and the `?v=`-keyed model file; HTML and
+  `model-meta.json` keep the revalidate-every-time default.
 - Single characters terminate via the attention window like full sentences —
   the modal-stroke-count table used by `inference.py` needs training data,
   which the browser doesn't have. Occasionally a lone glyph may run long;

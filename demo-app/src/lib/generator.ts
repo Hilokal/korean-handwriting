@@ -64,7 +64,7 @@ export class HandwritingModel {
     // Fully-qualified URL, not a root-relative path: ort loads its runtime
     // via dynamic import(), and Vite's dev server refuses module imports that
     // resolve into /public — an external (absolute) URL bypasses that.
-    ort.env.wasm.wasmPaths = new URL(`${baseUrl}/ort/`, location.href).href;
+    ort.env.wasm.wasmPaths = new URL(`${baseUrl}/ort/${__ORT_VERSION__}/`, location.href).href;
     ort.env.wasm.numThreads = 1; // single-thread wasm avoids COOP/COEP headers
     // model-meta.json and handwriting-step.onnx keep stable filenames across
     // deploys, so the CDN edge can serve a stale pair after a model update

@@ -1,0 +1,16 @@
+# Cloudflare Workers static-assets headers. Default for everything else stays
+# "public, max-age=0, must-revalidate" (+ ETag), which is right for HTML and
+# for model-meta.json (the un-versioned pointer the app fetches first).
+
+# Vite content-hashed bundles.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# The model is fetched as handwriting-step.onnx?v=<content hash> (see
+# generator.ts); a retrain changes the hash, so the URL is immutable.
+/model/handwriting-step.onnx
+  Cache-Control: public, max-age=31536000, immutable
+
+# onnxruntime wasm, served from /ort/<package version>/ (vite.config.ts).
+/ort/*
+  Cache-Control: public, max-age=31536000, immutable

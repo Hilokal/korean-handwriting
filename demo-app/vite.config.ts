@@ -45,12 +45,23 @@ function prerenderRoutes(): Plugin {
 // onnxruntime-web loads its wasm backend at runtime from a URL, not via the
 // bundler. Copy the wasm (+ loader .mjs) files into public/ort/ so they are
 // served in dev and shipped in dist/, matching ort.env.wasm.wasmPaths = "/ort/".
+const ORT_VERSION: string = JSON.parse(
+  fs.readFileSync(
+    path.join(here, "node_modules", "onnxruntime-web", "package.json"),
+    "utf8",
+  ),
+).version;
+
+// The wasm lives under /ort/<onnxruntime-web version>/ so public/_headers can
+// mark it immutable: the path changes exactly when the package does.
 function copyOrtWasm(): Plugin {
   return {
     name: "copy-ort-wasm",
     buildStart() {
       const dist = path.join(here, "node_modules", "onnxruntime-web", "dist");
-      const out = path.join(here, "public", "ort");
+      const root = path.join(here, "public", "ort");
+      fs.rmSync(root, { recursive: true, force: true }); // drop stale versions
+      const out = path.join(root, ORT_VERSION);
       fs.mkdirSync(out, { recursive: true });
       for (const f of fs.readdirSync(dist)) {
         // Only the plain simd-threaded backend — not jsep (WebGPU, 27 MB),
@@ -73,5 +84,6 @@ function copyOrtWasm(): Plugin {
 
 export default defineConfig({
   plugins: [react(), copyOrtWasm(), prerenderRoutes()],
+  define: { __ORT_VERSION__: JSON.stringify(ORT_VERSION) },
   server: { port: 5174 },
 });
