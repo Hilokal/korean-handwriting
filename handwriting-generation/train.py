@@ -10,6 +10,9 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, random_split
 
 
+LOG_SIGMA_MIN = float(os.environ.get("LOG_SIGMA_MIN", "-7.0"))
+
+
 def mdn_loss(
     pi_logits: torch.Tensor,
     mu: torch.Tensor,
@@ -35,6 +38,13 @@ def mdn_loss(
     x = target[..., 0:1]  # (B,S,1) -> broadcasts over K
     y = target[..., 1:2]
     f = target[..., 2:3]
+    # Floor on log sigma: a component collapsing onto one point otherwise
+    # underflows sigma to 0 -> inf/0/0 residuals -> NaN weights (the h256 run
+    # of 2026-10-09 went NaN between two healthy epochs this way; the h256
+    # spike of 2026-08-17 was the same hole, survived). exp(-7) ~ 1e-3 in
+    # standardized units, far tighter than any real stroke. Loss-side only:
+    # inference and the ONNX export are untouched.
+    log_sigma = log_sigma.clamp(min=LOG_SIGMA_MIN)
     mu_x, mu_y, mu_f = mu[..., 0], mu[..., 1], mu[..., 2]  # (B,S,K)
     log_sx, log_sy, log_sf = log_sigma[..., 0], log_sigma[..., 1], log_sigma[..., 2]
     sig_x, sig_y = log_sx.exp(), log_sy.exp()
@@ -61,7 +71,9 @@ def mdn_loss(
     log_pi = torch.log_softmax(pi_logits, dim=-1)  # (B,S,K)
     log_p = torch.logsumexp(log_pi + log_n, dim=-1)  # (B,S) log mixture likelihood
 
-    return -(log_p * mask).sum() / mask.sum()
+    # Select rather than multiply by the mask: 0 * inf would turn a blown-up
+    # padded step into NaN for the whole batch.
+    return -torch.where(mask, log_p, torch.zeros_like(log_p)).sum() / mask.sum()
 
 
 def collate_fn(batch: list[HandwritingData]):
@@ -145,6 +157,7 @@ def train_epoch(
     device: torch.device | str,
 ):
     _ = model.train()
+    skipped = 0
     total_loss = 0
     total_xy_loss = 0
     total_pen_loss = 0
@@ -173,9 +186,20 @@ def train_epoch(
         )
         loss = xy_loss + pen_loss
 
-        # Backward pass
+        # Non-finite guard: one bad batch must not poison the weights. Skip the
+        # step if the loss or the (pre-clip) gradient norm is inf/NaN -- clipping
+        # an inf norm zeroes the step, clipping a NaN norm writes NaN into every
+        # parameter and the run is dead from then on.
+        if not torch.isfinite(loss):
+            optimizer.zero_grad(set_to_none=True)
+            skipped += 1
+            continue
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP)
+        if not torch.isfinite(grad_norm):
+            optimizer.zero_grad(set_to_none=True)
+            skipped += 1
+            continue
         optimizer.step()
 
         total_loss += loss.item()
@@ -183,6 +207,8 @@ def train_epoch(
         total_pen_loss += pen_loss.item()
         num_batches += 1
 
+    if skipped:
+        print(f"  skipped {skipped} non-finite batch(es) this epoch")
     if num_batches == 0:
         return 0, 0, 0
 
