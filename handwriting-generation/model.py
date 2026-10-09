@@ -3,6 +3,8 @@
 # Python < 3.14, where annotations are evaluated eagerly. Keeps the code portable.
 from __future__ import annotations
 
+import warnings
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -573,20 +575,28 @@ class GRUWithSlidingAttention(nn.Module):
         for i in range(1, self.num_layers):
             cell = self.layers[i]
             layer_in = torch.cat([x_seq, self.dropout(below), w_seq], dim=-1)
-            out, h_n = torch._VF.gru(
-                layer_in,
-                hidden[i].unsqueeze(0).contiguous(),
-                [cell.weight_ih, cell.weight_hh, cell.bias_ih, cell.bias_hh],
-                True,  # has_biases
-                1,  # num_layers
-                0.0,  # inter-layer dropout (none: one layer per call)
-                # cuDNN's train flag only gates that (zero) dropout and whether it keeps
-                # the workspace a backward pass needs -- so key it to autograd, not
-                # module mode (eval-mode backward is legal in the reference loop too).
-                torch.is_grad_enabled(),
-                False,  # bidirectional
-                True,  # batch_first
-            )
+            # cuDNN wants the four weight tensors in one flat buffer and warns that
+            # it must "compact" them on every call because they are the GRUCell's
+            # separate Parameters (shared on purpose, so checkpoints and the
+            # single-step paths stay unchanged). The compaction is two small
+            # copies per batch (~1.7 MB each at hidden 256) -- immaterial next to
+            # the sequence kernel -- so silence the warning rather than restructure.
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=".*not part of single contiguous chunk.*")
+                out, h_n = torch._VF.gru(
+                    layer_in,
+                    hidden[i].unsqueeze(0).contiguous(),
+                    [cell.weight_ih, cell.weight_hh, cell.bias_ih, cell.bias_hh],
+                    True,  # has_biases
+                    1,  # num_layers
+                    0.0,  # inter-layer dropout (none: one layer per call)
+                    # cuDNN's train flag only gates that (zero) dropout and whether it keeps
+                    # the workspace a backward pass needs -- so key it to autograd, not
+                    # module mode (eval-mode backward is legal in the reference loop too).
+                    torch.is_grad_enabled(),
+                    False,  # bidirectional
+                    True,  # batch_first
+                )
             layer_out.append(out)
             final_hidden.append(h_n[0])
             below = out
