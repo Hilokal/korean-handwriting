@@ -298,13 +298,23 @@ def main():
     #   SYNTHETIC=1 -> stitched multi-character samples (window smoke test).
     #   (neither)   -> the original single-character folders.
     if os.environ.get("EXPORT"):
-        from handwriting_dataset import ExportDataset, split_by_text
+        from handwriting_dataset import ExportDataset, StripPeriodAugment, split_by_text
         from torch.utils.data import Subset
 
         dataset = ExportDataset()
         print(f"Using production export dataset ({len(dataset)} recordings)")
         train_idx, val_idx = split_by_text(dataset, val_frac=0.2)
-        train_dataset = Subset(dataset, train_idx)
+        # STRIP_PERIOD_P (default 0.5): probability that a train line ending in
+        # "." is served with its period removed -- transcript and dot stroke --
+        # so the window learns [syllable][EOT] endings the corpus lacks (see
+        # handwriting_dataset.strip_trailing_period). STRIP_PERIOD_P=0 disables.
+        # Val is never augmented.
+        strip_p = float(os.environ.get("STRIP_PERIOD_P", "0.5"))
+        train_dataset = StripPeriodAugment(dataset, train_idx, p=strip_p)
+        print(
+            f"Trailing-period augmentation: p={strip_p}, "
+            f"{train_dataset.eligible}/{len(train_idx)} train lines eligible"
+        )
         val_dataset = Subset(dataset, val_idx)
     elif os.environ.get("SYNTHETIC"):
         from synthetic_dataset import SyntheticMultiCharDataset

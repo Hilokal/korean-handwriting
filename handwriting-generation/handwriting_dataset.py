@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import statistics
 from pathlib import Path
 from typing import TypedDict
@@ -49,6 +50,54 @@ def append_tail(strokes: torch.Tensor) -> torch.Tensor:
         [[0.0, 0.0, 1.0, TAIL_FORCE]] * TAIL_LEN, dtype=strokes.dtype
     )
     return torch.cat([strokes, tail], dim=0)
+
+
+# --- Trailing-period augmentation --------------------------------------------
+# 2,562 of the 2,594 corpus sentences end in punctuation (0 end in a bare 요,
+# 2 in a bare 다), so the attention window has effectively never seen
+# [syllable][EOT]. At generation time a bare ending (안녕하세요, 좋다) makes the
+# window reach EOT one stroke early and generate() cuts there -- the ㅏ tick /
+# ㅛ bar is lost and 다 reads as 디 (HN launch feedback, 2026-10-11). Stripping
+# a line's period -- the "." unit from the transcript AND the dot stroke from
+# the pen data -- turns an existing recording into a bare-ending example at
+# zero collection cost. Only lines whose final stroke is unambiguously the dot
+# qualify (97.6% of period-ending u2 lines: a ≤3-point stroke of ~0.01 extent).
+PERIOD_MAX_POINTS = 6
+PERIOD_MAX_EXTENT = 0.4  # raw pen units; a written line is ~2.5 tall
+
+
+def strip_trailing_period(
+    strokes: torch.Tensor, text: str
+) -> tuple[torch.Tensor, str] | None:
+    """Drop a line's final "." -- from the transcript and from the strokes.
+
+    `strokes` is the (N, 4) real-point tensor *before* append_tail. Returns the
+    shortened (strokes, text) pair, or None when the line is not eligible: the
+    text does not end in ".", there is only one stroke, or the last stroke is
+    not a dot (too many points or too large -- the writer skipped the period or
+    wrote it earlier, so cutting the last stroke would maim a glyph).
+    """
+    t = text.rstrip()
+    if len(t) < 2 or not t.endswith("."):
+        return None
+    new_text = t[:-1].rstrip()
+    if not new_text:
+        return None
+    ends = (strokes[:, 2] == 1).nonzero().flatten()
+    if ends.numel() < 2:
+        return None
+    last_start = int(ends[-2].item()) + 1
+    last = strokes[last_start:]
+    if last.size(0) > PERIOD_MAX_POINTS:
+        return None
+    # The first point's delta is the pen-up jump *into* the dot; the dot's own
+    # extent is the spread of the points after it.
+    pos = torch.cat([torch.zeros(1, 2), last[1:, :2].cumsum(0)], dim=0)
+    if (pos.max(0).values - pos.min(0).values).max().item() > PERIOD_MAX_EXTENT:
+        return None
+    # The previous stroke's last point already carries penState=1 (trailing-edge
+    # anchoring), so truncating is enough -- no flag to repair.
+    return strokes[:last_start], new_text
 
 
 class HandwritingData(TypedDict):
@@ -225,6 +274,7 @@ class ExportDataset(Dataset[HandwritingData]):
 
         self.items: list[HandwritingData] = []
         self.meta: list[dict] = []
+        self.alt: list[HandwritingData | None] = []
         for f in sorted(root.glob("**/*.json")):
             with open(f, "r") as fp:
                 data = json.load(fp)
@@ -243,12 +293,52 @@ class ExportDataset(Dataset[HandwritingData]):
             self.meta.append(
                 {"text": text, "sentence_id": data["metadata"].get("sentenceId")}
             )
+            # Period-stripped twin (see strip_trailing_period); None when the
+            # line is not eligible. Served by StripPeriodAugment on the train
+            # split only -- items[] itself is never modified, so val and every
+            # existing eval path see the recording as written.
+            stripped = strip_trailing_period(strokes, text)
+            self.alt.append(
+                None
+                if stripped is None
+                else {"strokes": append_tail(stripped[0]), "tokens": tokenize(stripped[1])}
+            )
 
     def __len__(self) -> int:
         return len(self.items)
 
     def __getitem__(self, idx: int) -> HandwritingData:
         return self.items[idx]
+
+
+class StripPeriodAugment(Dataset[HandwritingData]):
+    """Train-split view of an ExportDataset with trailing-period augmentation.
+
+    For the given indices, each fetch returns the period-stripped twin
+    (ExportDataset.alt) with probability `p` when one exists, else the recording
+    as written. p=0 makes this a plain Subset. Wrap only the *train* indices:
+    val must keep scoring the lines as the writer wrote them.
+    """
+
+    def __init__(self, base: ExportDataset, indices: list[int], p: float, seed: int = 0):
+        self.base = base
+        self.indices = list(indices)
+        self.p = p
+        self.rng = random.Random(seed)
+
+    @property
+    def eligible(self) -> int:
+        return sum(1 for i in self.indices if self.base.alt[i] is not None)
+
+    def __len__(self) -> int:
+        return len(self.indices)
+
+    def __getitem__(self, i: int) -> HandwritingData:
+        idx = self.indices[i]
+        alt = self.base.alt[idx]
+        if alt is not None and self.p > 0 and self.rng.random() < self.p:
+            return alt
+        return self.base.items[idx]
 
 
 def split_by_text(

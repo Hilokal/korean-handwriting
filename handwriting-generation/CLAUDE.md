@@ -23,7 +23,7 @@ pressure.
 | File | Role |
 |------|------|
 | `tokenizer.py` | `tokenize(text)` → `(U, 4)` Long tensor, one row per unit: `[leading, vowel, trailing, symbol]`. Hangul syllables decompose into the three jamo (symbol `0`); space/`.`/`,`/`!`/`?` use jamo `0` and a symbol id ≥ 1; unknown chars map to the unknown-symbol id (never raises). The last row is always the **EOT unit** (`EOT_SYMBOL_ID`, appended by `tokenize` itself so training and inference can't drift), so `U` = characters + 1 — see progress #12. `decompose_hangul_syllable` is the standard Unicode algorithm (`trailingIndex == 0` = no 받침). |
-| `handwriting_dataset.py` | `HandwritingDataset` loads the single-char folders `../data/<character>/*.json` (the `characters` list). `ExportDataset` loads the production export `../data/export/recordings/**/*.json` — real multi-character lines, transcript in `metadata.text`. Both yield `{strokes: (N,4), tokens: (U,4)}` — `[dx, dy, penState, f]` per point. `FORCE_MEAN`/`FORCE_STD` standardize the pen force (frozen constants; see Data). `transform()` (a staticmethod) converts dots → deltas. `split_by_text()` holds out whole sentences for the val set. |
+| `handwriting_dataset.py` | `HandwritingDataset` loads the single-char folders `../data/<character>/*.json` (the `characters` list). `ExportDataset` loads the production export `../data/export/recordings/**/*.json` — real multi-character lines, transcript in `metadata.text`. Both yield `{strokes: (N,4), tokens: (U,4)}` — `[dx, dy, penState, f]` per point. `FORCE_MEAN`/`FORCE_STD` standardize the pen force (frozen constants; see Data). `transform()` (a staticmethod) converts dots → deltas. `split_by_text()` holds out whole sentences for the val set. `strip_trailing_period()` / `StripPeriodAugment` implement the trailing-period augmentation (`STRIP_PERIOD_P`, see Data + progress #17). |
 | `synthetic_dataset.py` | `concat_samples()` stitches single-char recordings into synthetic multi-char "lines" (left-to-right, gap ∝ glyph width); `SyntheticMultiCharDataset` builds a set with mixed U. Exercises the attention window before real line data is available. |
 | `model.py` | `HandwritingRNN`: jamo + symbol embeddings → `GRUWithSlidingAttention` (custom `GRUCell` loop with the Graves window) + an **MDN** head over `(dx, dy, f)` and a **binary** end-of-stroke head. Holds `mdn_params()` and `generate()` for autoregressive sampling. |
 | `train.py` | Training loop + `mdn_loss` (NLL of `(dx, dy, f)` under the mixture: bivariate Gaussian over the offset × independent Gaussian over pressure, per component). Dataset chosen by env var (see Running). Early stopping; saves the best checkpoint to `best_model.pt`. |
@@ -33,6 +33,8 @@ pressure.
 | `export_onnx.py` | Exports ONE step of the recurrence as an ONNX graph for the in-browser demo (`../demo-app`). A trace-friendly `SingleStep` wrapper re-derives the step from the model's submodules (`u`/`mask` become graph inputs because the tracer would bake `arange(U)`/`ones(B,U)` to constants). Also writes `model-meta.json` (arch dims + a content-hash `version` stamped into demo feedback records). Re-run + parity-test after every retrain. |
 | `test_onnx_parity.py` | Two-way parity check over a 200-step stateful rollout: wrapper vs `model.forward` (catches wrapper drift) and ONNX Runtime vs wrapper (catches export bugs). Must print `PARITY OK`. |
 | `download_export.sh` | Downloads all recordings from the production collection app into `../data/export/` via the admin export endpoint. Secure password prompt; re-run to refresh. |
+| `generate_endings_batch.py` | Builds a curated batch of **line endings** — clause-final words and 2-3 word phrases from the corpus, ~half with no terminal punctuation, stratified by the shape of the final syllable's last stroke (tick / bar / vertical / 받침 family). No LLM. Writes `../collection-app/curated/endings-YYYY-MM.jsonl`, source `synthetic-line-endings`. See progress #17. |
+| `generate_sentences.py` | Claude-written curated sentences targeting a worker's thinnest syllables (`curated/thin-*.jsonl`). Note: its prompt and validator require terminal punctuation — the design decision behind progress #17's bare-ending gap. |
 | `fetch_reference_texts.py` | Fetches clean Hangul sentences from Korean Wikipedia into `../data/reference-texts/` (per-page `.txt` + `all.jsonl`, gitignored). Filters to pure-Hangul sentences and reports jamo/syllable coverage. Supports `--featured`/`--good`/`--category` bulk fetching, `--resume`, and authenticated fetching via `WIKI_USERNAME`/`WIKI_BOT_PASSWORD` env vars (bot password; anonymous requests get heavily rate-limited). |
 | `best_model.eot.pt` | The bundled trained model (3-layer, hidden 128, embedding_size 8, pressure + EOT/tail — the 2026-10-07 retrain on 4,454 lines incl. the 600-sentence thin-syllable batch; see progress #16). Load with `NUM_LAYERS=3 EMBEDDING_SIZE=8`. Training writes new checkpoints to `best_model.pt` (gitignored). `best_model.pressure.pt` / `best_model.emb8.pt` are older bundled models, historical only; they no longer load. |
 | `babysit_pod_training.sh` | Watches a RunPod training run; on completion (or crash) pulls `best_model.pt` + `checkpoint.pt` + the log into `runs/<date>-<pod>/`, then deletes the pod (only if the pull verifiably succeeded). Run detached under `nohup caffeinate -i` for overnight runs. |
@@ -93,6 +95,16 @@ pressure.
     the output. The single-char `HandwritingDataset` does **not** get tails
     (it would inflate `modal_stroke_counts()`; that legacy path terminates by
     stroke count).
+  - **Trailing-period augmentation** (`strip_trailing_period`,
+    `StripPeriodAugment`; `STRIP_PERIOD_P`, default 0.5, train split only):
+    2,562 of 2,594 corpus sentences end in punctuation (0 in a bare 요, 2 in a
+    bare 다), so the window never saw `[syllable][EOT]` and bare endings
+    terminated one stroke early at generation (progress #17). With probability
+    p a period-ending train line is served with its final `.` removed from the
+    transcript **and** its final stroke removed from the pen data; eligible only
+    when that stroke is unambiguously the dot (≤6 points, ≤0.4 extent — 2,732 of
+    2,794 period lines). Val is never augmented. `STRIP_PERIOD_P=0` reproduces
+    the pre-#17 training distribution exactly.
 
 ## Token scheme
 
@@ -224,6 +236,7 @@ Train — the dataset is chosen by an env var (writes `best_model.pt`):
 
 ```bash
 EXPORT=1 python train.py      # real multi-character lines (../data/export/), held out by text
+EXPORT=1 STRIP_PERIOD_P=0 python train.py   # ...without the trailing-period augmentation (default p=0.5)
 SYNTHETIC=1 python train.py   # stitched multi-char samples (attention-window smoke test)
 python train.py               # original single-character folders (../data/<char>/)
 ```
@@ -641,6 +654,36 @@ Fixes landed, in order:
     window-path regularization (dropout on `w`, weight decay on window
     columns, or Graves adaptive weight noise) exists. Artifacts in
     `runs/2026-10-09-h256/` (load with `HIDDEN_SIZE=256`), gitignored.
+17. **HN launch feedback → bare-ending truncation (2026-10-11/12).** Show HN
+    (item 50015833, 88 points) brought 40 thumbs-down in a day on `746ddd1a`;
+    ~half were the default text "안녕하세요" missing its last stroke, plus the
+    thread's report that a sentence ending in 다 renders 디 while 다. is fine.
+    **Not a termination-code bug: a corpus gap.** 2,562/2,594 training
+    sentences end in punctuation, 0 in a bare 요, 2 in a bare 다 — every
+    sentence source enforces it (the Wikipedia splitter cuts on `[.!?]`,
+    `generate_sentences.py`'s prompt and validator reject lines without
+    terminal punctuation). The window has only ever seen `[punct][EOT]`, so
+    with `[syllable][EOT]` its peak reaches EOT one stroke early and
+    `generate()` cuts at that boundary: the ㅏ tick / ㅛ bar is dropped.
+    Reproduced 6/6 seeds (좋다 vs 좋다., 조슈아 vs 조슈아., 안녕하세요 vs
+    안녕하세요.). Trailing spaces are equally unseen and add a spurious stroke
+    ("고양이 "). Two fixes landed, retrain pending: **(a)** the
+    trailing-period augmentation (see Data; `STRIP_PERIOD_P`), which turns
+    2,732 existing recordings into bare-ending examples and de-confounds
+    "bare ending" from "short line"; **(b)** `generate_endings_batch.py` →
+    `curated/endings-2026-10.jsonl`: 468 lines (359 clause-final words + 109
+    2-3 word phrases, mean 4.6 chars; 53% bare / 39% `.` / 6% `!` / 2% `?`),
+    stratified by the final stroke's shape class so ticks (ㅏㅑㅜㅠㅘ, 117),
+    bars (ㅗㅛㅡ, 86), verticals (74) and each major 받침 are covered, with the
+    generic demo failures (안녕하세요, 고양이, 커피 …) included. Import with
+    `PRIORITY=2` so it runs ahead of the thin batch. Judge the retrain on the
+    leak-free val subset and on bare-ending renders. Other feedback themes
+    (not yet acted on): unsupported characters (digits/parens/`<>` hit the
+    never-trained UNKNOWN id), rare syllables (쀍 0, 녕 8, 꽤/꿈 6), recurring
+    커 (28 occurrences, reported across four versions) and 좋/ㅎ; demo-side
+    whitespace trimming. Velocity input is **off the list**: the pen samples
+    at a fixed ~11.5 ms, so speed is the delta magnitude the model already
+    sees; only pen-up pause duration is new information.
 
 **Still open:**
 - **Within-stroke taper in the animated download SVG** — the live canvas now
@@ -687,19 +730,24 @@ Fixes landed, in order:
 - Pen head is *modestly* predictive, not sharp — stroke length is highly variable
   (median 9, std 7.8), so one-step-ahead end-of-stroke is inherently partly
   stochastic (ceiling ~1.05). The pressure input (progress #8) is the first
-  physical lift-precursor it gets; if that doesn't close the gap, a
-  timing/velocity input (recordings carry `timeStamp`, currently discarded) is
-  the next candidate.
+  physical lift-precursor it gets. Velocity is NOT a candidate (fixed-rate
+  sampling makes it the delta magnitude, already an input — see #17); the one
+  unseen timing signal is the pen-up pause between strokes.
 - Long-sequence training cost — see Performance (truncated BPTT).
 - Open architecture A/Bs (do after position, one at a time): LSTM vs GRU (the long
   sequences + cell-state accumulator may hold running position better), and a 3rd
   hidden layer (Graves used 3; more capacity to exploit position, low overfit risk).
 
-**Feed timing/velocity.** The recordings carry per-dot `timeStamp` (and Ncode
-gives pen dynamics), which we currently discard. Pen pauses/slow-downs physically
-signal stroke ends far better than geometry, so a velocity or time-since-lift
-input channel is the most promising lever for the pen head beyond the skip
-connections (see the ~1.05 predictability ceiling in the progress log).
+**Feed pause duration (not velocity).** The recordings carry per-dot
+`timeStamp`, currently discarded. Measured 2026-10-12: the pen samples at a
+fixed 11-12 ms (94% of intra-stroke intervals), so within a stroke velocity ≡
+the `(dx, dy)` magnitude the model already sees and a velocity channel would
+add nothing. What *is* unseen is the pen-up gap between strokes (median ~60 ms,
+long tail to seconds): it separates within-syllable strokes from syllable and
+word boundaries, so the gain would land on the XY head at stroke starts, not on
+the pen head. Like pressure it must be fed back autoregressively, hence also
+predicted (another MDN dimension + demo/ONNX changes) — a lot of surface for a
+modest expected gain; do the free pen-head refit first.
 
 ## Checkpoints
 
