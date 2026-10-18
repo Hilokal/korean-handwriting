@@ -3,16 +3,26 @@
 // language toggle. Drives the system Chrome via puppeteer-core.
 //
 //   npx tsx scripts/browser-test.ts [url]     (default http://localhost:4173)
+//
+// CHROME_PATH overrides the browser (default: macOS system Chrome). On Linux:
+//   npx @puppeteer/browsers install chrome-headless-shell@stable --path ~/.cache/puppeteer
+// then point CHROME_PATH at the chrome-headless-shell binary it prints.
 
 import puppeteer from "puppeteer-core";
 
 const url = process.argv[2] ?? "http://localhost:4173";
-const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const CHROME =
+  process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
 const browser = await puppeteer.launch({
   executablePath: CHROME,
   headless: true,
-  args: ["--window-size=1100,900"],
+  // Ubuntu 23.10+ blocks the unprivileged user namespaces Chrome's sandbox
+  // needs (AppArmor). The test only loads our own app, so skip the sandbox.
+  args: [
+    "--window-size=1100,900",
+    ...(process.platform === "linux" ? ["--no-sandbox"] : []),
+  ],
 });
 try {
   const page = await browser.newPage();
