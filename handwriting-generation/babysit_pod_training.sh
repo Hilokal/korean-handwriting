@@ -26,7 +26,9 @@
 # deleted -- checkpoint.pt can resume it on a fresh pod -- but the state is
 # clearly reported. If the pull fails, the pod is LEFT RUNNING and this exits 1.
 #
-# Env knobs: POLL (seconds between checks, default 120).
+# Env knobs: POLL (seconds between checks, default 120); SSH_KEY (private key
+# to use instead of runpodctl's own -- needed when the pod was created before
+# runpodctl's key was registered, so that key isn't in its authorized_keys).
 set -euo pipefail
 
 POD_ID="${1:?usage: babysit_pod_training.sh <pod-id> [remote-run-dir] [local-out-dir]}"
@@ -43,8 +45,11 @@ import json, sys
 p = json.load(sys.stdin)
 print(p["ssh"]["ip"], p["ssh"]["port"], p["ssh"]["ssh_key"]["path"], p["name"])
 ' <<<"$info")
+KEY="${SSH_KEY:-$KEY}"
 OUT_DIR="${3:-runs/$(date -u +%Y-%m-%d)-${NAME}}"
-SSH_OPTS=(-i "$KEY" -p "$PORT" -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new)
+# -o Port, not -p: SSH_OPTS is shared with scp, where -p means "preserve times"
+# (scp's port flag is -P) and the pull silently goes to port 22.
+SSH_OPTS=(-i "$KEY" -o IdentitiesOnly=yes -o Port="$PORT" -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new)
 remote() { ssh "${SSH_OPTS[@]}" "root@$IP" "$@"; }
 
 say "watching pod $POD_ID ($NAME) at $IP:$PORT, dir $REMOTE_DIR, every ${POLL}s"

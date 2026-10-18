@@ -13,6 +13,12 @@ JamoCount = 3
 
 from tokenizer import LeadingCount, SymbolCount, TrailingCount, VowelCount, tokenize
 
+# Parked-pen regime (handwriting_dataset.append_tail trains f to TAIL_FORCE =
+# -3.0; every real point sits above ~-2.3). Used by the end trim and by
+# generate(stop="park").
+PARK_FORCE = -2.5
+PARK_RUN = 3
+
 
 def _frozen_onehot(rows: int, width: int, offset: int) -> nn.Embedding:
     """An identity lookup table: row r is one-hot at column offset + r, frozen."""
@@ -231,6 +237,7 @@ class HandwritingRNN(nn.Module):
         num_strokes: int | None = None,
         device: torch.device | str = "cpu",
         trace: list | None = None,
+        stop: str = "park",
     ):
         """Generate a handwriting sequence autoregressively.
 
@@ -243,10 +250,19 @@ class HandwritingRNN(nn.Module):
                   mixture = cleaner/less varied strokes; 0 = unbiased.
             num_strokes: If set, stop after this many strokes are drawn (the
                   character's expected stroke count; the legacy single-char
-                  path). If None, terminate via the attention window: stop at
-                  a stroke boundary once its peak reaches the trained EOT
-                  unit (or the phantom past-the-end phi wins -- the backstop),
-                  with max_len as the hard limit.
+                  path). If None, terminate per `stop`, with max_len as the
+                  hard limit.
+            stop: Multi-character stop rule when num_strokes is None.
+                  "park" (default) = stop once the model itself emits the
+                  trained parked-pen tail (PARK_RUN consecutive points with
+                  force below PARK_FORCE), or at a stroke boundary when the
+                  phantom past-the-end phi outweighs every real unit (the
+                  backstop). "window" = the pre-2026-10-17 rule: stop at a
+                  stroke boundary once the window's peak reaches the EOT
+                  unit (phantom backstop too). Kept for A/B only: the peak
+                  reaches EOT one stroke early on bare endings (좋다 -> 좋디,
+                  10/10 seeds on the 10-17 retrain) even though the model
+                  draws the ㅏ tick when not cut off.
             device: Device to run on
             trace: If a list, one dict per generated point is appended with the
                   step's sampling-time internals (post-bias pi/sigma, mu, rho,
@@ -267,6 +283,7 @@ class HandwritingRNN(nn.Module):
         tokens = tokenize(character).unsqueeze(0).to(device)  # (1, U, 3)
         U = tokens.size(1)
         token_mask = torch.ones(1, U, device=device)
+        parked_run = 0  # consecutive sampled points in the parked-pen regime
 
         with torch.no_grad():
             # Process the starting sequence to prime the recurrent + window state
@@ -335,21 +352,28 @@ class HandwritingRNN(nn.Module):
                     tokens, next_point, token_mask, state
                 )
 
-                # Multi-character termination, reading the attention (unlike
-                # the old kappa.mean() >= U heuristic, which read kappa's
-                # internal component layout and fired late on one checkpoint,
-                # early on the next). Deferred until the current stroke ends so
-                # the cut never leaves a dangling partial stroke; max_len
-                # remains the backstop. Two tests, either stops:
-                #   - primary: the window's peak has reached the final unit --
-                #     the EOT token tokenize() appends -- i.e. every real
-                #     character is written and the model is in its *trained*
-                #     parked-pen regime (see handwriting_dataset.append_tail).
-                #   - backstop: Graves' phi test (the phantom past-the-end
-                #     column outweighs every real unit), which needs no trained
-                #     EOT and catches a window that overshoots it.
+                # Multi-character termination; max_len remains the hard limit.
+                #   - "park" (primary): the model has started emitting its
+                #     *trained* parked-pen tail (handwriting_dataset.
+                #     append_tail), i.e. it has finished writing by its own
+                #     account. Parked points are lifts with ~zero offsets, so
+                #     no partial stroke is left dangling; the end trim below
+                #     removes them. One stray low-force sample must not end
+                #     the line, hence the run length.
+                #   - backstop (both rules): Graves' phi test at a stroke
+                #     boundary -- the phantom past-the-end column outweighs
+                #     every real unit -- for a window that overshoots EOT.
+                #   - "window" (A/B only): the window's peak on the EOT unit.
+                #     Fires one stroke early on bare endings (see docstring).
                 phi_t = phi[0, -1]  # (U+1,)
-                if (
+                if num_strokes is None and U > 1 and stop == "park":
+                    parked_run = parked_run + 1 if f.item() < PARK_FORCE else 0
+                    if parked_run >= PARK_RUN or (
+                        pen_state.item() == 1
+                        and phi_t[U].item() > phi_t[:U].max().item()
+                    ):
+                        break
+                elif (
                     num_strokes is None
                     and U > 1
                     and pen_state.item() == 1
@@ -366,7 +390,7 @@ class HandwritingRNN(nn.Module):
         # real point sits above ~-2.3 -- so a genuine final dot (e.g. a
         # period's near-zero offsets) is never eaten by this.
         start_len = start_seq.size(1)
-        while generated.size(1) > start_len and generated[0, -1, 3].item() < -2.5:
+        while generated.size(1) > start_len and generated[0, -1, 3].item() < PARK_FORCE:
             generated = generated[:, :-1, :]
 
         return generated

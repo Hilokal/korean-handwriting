@@ -49,6 +49,9 @@ const YIELD_EVERY = 8; // macrotask break so the UI stays at 60fps
 // buffer them instead of yielding, so they vanish if generation ends there
 // (the streaming equivalent of model.generate()'s trailing-force trim).
 const PARKED_F_STD = -2.5;
+// This many consecutive parked dots = the model has finished writing by its
+// own (trained) account: stop. Mirrors model.py PARK_FORCE / PARK_RUN.
+const PARKED_RUN = 3;
 
 function sigmoid(v: number): number {
   return 1 / (1 + Math.exp(-v));
@@ -136,27 +139,25 @@ export class HandwritingModel {
 
     let prevPen: 0 | 1 = 0;
     const parked: Dot[] = []; // see PARKED_F_STD
+    let parkedRun = 0; // consecutive parked dots, see PARKED_RUN
     for (let step = 0; step < maxLen; step++) {
       if (signal?.aborted) return;
       const out = await this.session.run(feeds);
 
-      // --- termination (attention-based, mirrors model.generate()) ---
-      // This run consumed the previously yielded dot; if that dot ended a
-      // stroke, the text is finished when either (a) the window's peak sits
-      // on the final unit -- the trained EOT token, which owns no strokes, so
-      // this can't truncate a multi-stroke final syllable -- or (b) the
-      // phantom past-the-end phi outweighs every real unit (backstop).
-      // Checking before sampling keeps the timing identical to the Python loop.
+      // --- termination (mirrors model.generate(stop="park")) ---
+      // This run consumed the previously sampled dot. Stop when (a) the last
+      // PARKED_RUN dots were all parked -- the model is emitting its trained
+      // end-of-text tail -- or (b) that dot ended a stroke and the phantom
+      // past-the-end phi outweighs every real unit (backstop). The older
+      // window-peak-on-EOT test fired one stroke early on bare endings
+      // (좋다 -> 좋디). Checking before sampling keeps the timing identical
+      // to the Python loop.
+      if (parkedRun >= PARKED_RUN) return;
       if (prevPen === 1 && U > 1) {
         const phi = out.phi.data as Float32Array; // (1, U+1)
         let maxReal = -Infinity;
-        let argmax = 0;
-        for (let i = 0; i < U; i++)
-          if (phi[i] > maxReal) {
-            maxReal = phi[i];
-            argmax = i;
-          }
-        if (argmax === U - 1 || phi[U] > maxReal) return;
+        for (let i = 0; i < U; i++) if (phi[i] > maxReal) maxReal = phi[i];
+        if (phi[U] > maxReal) return;
       }
 
       // --- end-of-stroke: greedy at temperature 0, else Bernoulli ---
@@ -219,9 +220,11 @@ export class HandwritingModel {
       // pen/fStd regardless) -- buffering only affects what gets displayed.
       if (fStd < PARKED_F_STD) {
         parked.push(dot);
+        parkedRun++;
       } else {
         yield* parked.splice(0);
         yield dot;
+        parkedRun = 0;
       }
       prevPen = pen;
 

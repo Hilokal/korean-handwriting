@@ -44,6 +44,7 @@ def generate_sequence(
     seed=None,
     bias=0.0,
     num_strokes=None,
+    stop="park",
 ):
     """Generate a handwriting sequence.
 
@@ -79,6 +80,7 @@ def generate_sequence(
         bias=bias,
         num_strokes=num_strokes,
         device=device,
+        stop=stop,
     )
 
     return generated.squeeze(0).cpu().numpy()

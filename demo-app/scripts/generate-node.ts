@@ -68,11 +68,14 @@ export async function generateDots(
   const dots: Dot[] = [];
   const t0 = performance.now();
   let prevPen: 0 | 1 = 0;
+  let parkedRun = 0;
   for (let step = 0; step < U * 120 + 500; step++) {
     const out = await session.run(feeds);
 
-    // Graves' phi termination (see generator.ts): the phantom past-the-end
-    // column outweighs every real character, checked at stroke boundaries.
+    // Termination (see generator.ts): 3 consecutive parked dots (force below
+    // -2.5 standardized -- the trained end-of-text tail), or the phantom
+    // past-the-end column outweighs every real character at a stroke boundary.
+    if (parkedRun >= 3) break;
     if (prevPen === 1 && U > 1) {
       const phi = out.phi.data as Float32Array;
       let maxReal = -Infinity;
@@ -127,6 +130,7 @@ export async function generateDots(
       f: meta.forceMean + fStd * meta.forceStd,
     });
     prevPen = pen;
+    parkedRun = fStd < -2.5 ? parkedRun + 1 : 0;
 
     feeds = {
       tokens,
@@ -143,6 +147,9 @@ export async function generateDots(
       pos: out.pos_out as ort.Tensor,
     };
   }
+  // Drop trailing parked dots, as generator.ts does by never yielding them.
+  const parkedF = meta.forceMean - 2.5 * meta.forceStd;
+  while (dots.length && dots[dots.length - 1].f < parkedF) dots.pop();
   const ms = performance.now() - t0;
   return { dots, U, ms };
 }

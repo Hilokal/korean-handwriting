@@ -36,7 +36,7 @@ pressure.
 | `generate_endings_batch.py` | Builds a curated batch of **line endings** — clause-final words and 2-3 word phrases from the corpus, ~half with no terminal punctuation, stratified by the shape of the final syllable's last stroke (tick / bar / vertical / 받침 family). No LLM. Writes `../collection-app/curated/endings-YYYY-MM.jsonl`, source `synthetic-line-endings`. See progress #17. |
 | `generate_sentences.py` | Claude-written curated sentences targeting a worker's thinnest syllables (`curated/thin-*.jsonl`). Note: its prompt and validator require terminal punctuation — the design decision behind progress #17's bare-ending gap. |
 | `fetch_reference_texts.py` | Fetches clean Hangul sentences from Korean Wikipedia into `../data/reference-texts/` (per-page `.txt` + `all.jsonl`, gitignored). Filters to pure-Hangul sentences and reports jamo/syllable coverage. Supports `--featured`/`--good`/`--category` bulk fetching, `--resume`, and authenticated fetching via `WIKI_USERNAME`/`WIKI_BOT_PASSWORD` env vars (bot password; anonymous requests get heavily rate-limited). |
-| `best_model.eot.pt` | The bundled trained model (3-layer, hidden 128, embedding_size 8, pressure + EOT/tail — the 2026-10-07 retrain on 4,454 lines incl. the 600-sentence thin-syllable batch; see progress #16). Load with `NUM_LAYERS=3 EMBEDDING_SIZE=8`. Training writes new checkpoints to `best_model.pt` (gitignored). `best_model.pressure.pt` / `best_model.emb8.pt` are older bundled models, historical only; they no longer load. |
+| `best_model.eot.pt` | The bundled trained model (3-layer, hidden 128, embedding_size 8, pressure + EOT/tail — the 2026-10-17 retrain on 5,329 lines incl. the 468-line endings batch, trailing-period augmentation on; see progress #18). Load with `NUM_LAYERS=3 EMBEDDING_SIZE=8`. Training writes new checkpoints to `best_model.pt` (gitignored). `best_model.pressure.pt` / `best_model.emb8.pt` are older bundled models, historical only; they no longer load. |
 | `babysit_pod_training.sh` | Watches a RunPod training run; on completion (or crash) pulls `best_model.pt` + `checkpoint.pt` + the log into `runs/<date>-<pod>/`, then deletes the pod (only if the pull verifiably succeeded). Run detached under `nohup caffeinate -i` for overnight runs. |
 
 ## Data
@@ -200,8 +200,9 @@ and the GRU layer-0 input width is 30 (`4` pen dims `[dx, dy, penState, f]` +
   end-of-stroke Bernoulli. Termination is *not* a learned end-of-sequence
   class: at generation it stops after a fixed stroke count
   (`modal_stroke_counts()`, per single character) or — for multi-character
-  strings — when the attention window's peak reaches the trained EOT unit
-  (phantom-phi test as backstop; see progress #12).
+  strings — when the model emits its trained parked-pen tail (3 consecutive
+  points with force < −2.5; phantom-phi test as backstop; see progress #12
+  and #18 — the earlier window-peak-on-EOT rule cut bare endings short).
 - The lift flag is **trailing-edge** (`1` = stroke's last point) so it precedes
   and conditions the next jump. This representation change (no new inputs) fixed
   the "vowel slashes through the ㅇ" jumps and gave proper ㅇ-left/ㅏ-right
@@ -684,6 +685,41 @@ Fixes landed, in order:
     whitespace trimming. Velocity input is **off the list**: the pen samples
     at a fixed ~11.5 ms, so speed is the delta magnitude the model already
     sees; only pen-up pause duration is new information.
+18. **Endings retrain + park stop rule (2026-10-17) — #17's diagnosis was
+    incomplete.** Export 5,329 u2 lines (all 468 endings sentences recorded);
+    champion recipe + `STRIP_PERIOD_P=0.5`, RunPod 4090 on a Threadripper
+    7960X (Zen 4, fast), ~15s/epoch with CUDA graphs: early-stopped at epoch
+    981 after 4h02m (~$4.15 incl. ~20 min idle from a babysit scp bug, now
+    fixed), best val **−5.2379** on a 4,283/1,046 split. **Leak-free A/B vs
+    the 10-07 champion** (`eval_models.py`, cutoff `2026-10-07 18:00` — the
+    champion's 4,454th recording is 10-07 13:31, the next 23:59; note the
+    manifest uses a *space* separator, so a `T` cutoff string misclassifies
+    same-day lines): leak-free 154 lines **+0.107** (endings 104 +0.147,
+    other 50 +0.080), pen 0.193→0.183; full val −0.007 and seen-by-champion
+    −0.026 — the memorization tell again. Letterforms cleaner (좋's ㅇ).
+    **But bare endings still truncated with the old stop rule:** 좋다 → 좋디
+    10/10 seeds (bias 0.5, demo default), and the acceptance sentence
+    아름다운 문자입니다 → …니디 10/10 — on the champion too. **Forcing the
+    stroke count (stop disabled), the model draws the ㅏ tick 4/4 seeds:** the
+    model had learned it; `argmax(phi[:U]) == U-1` fires one stroke early.
+    The corpus gap (#17) was real but the window-peak stop masked the fix.
+    **New default `generate(stop="park")`:** stop once the model emits its
+    trained parked-pen tail (`PARK_RUN=3` consecutive points with
+    f < `PARK_FORCE=-2.5`), phantom-phi backstop kept; the old rule stays as
+    `stop="window"` for A/B. A learned signal, not a per-checkpoint threshold
+    (cf. #7/#9). Same checkpoint, seeds 0-9, bias 0.5, dropped final stroke:
+    좋다 10→0, 아름다운 문자입니다 10→0, 안녕하세요 5→2, 좋아요 4→1,
+    고양이 2→1, 커피 1→1; **0 runaways in 240 generations**. Cost: in 3/60
+    bare samples the park rule adds one stroke of scribble before parking
+    (two of them already-garbled samples; one stray mark after 커피 seed 2).
+    Ported to `demo-app` (`generator.ts`, and `scripts/generate-node.ts`,
+    whose duplicated loop had drifted — it had neither the EOT stop nor the
+    parked trim, so smoke reported tail points as strokes: 96 → 43 strokes
+    on the smoke sentence). JS/ONNX bare-ending check matches Python rates.
+    Promoted as `best_model.eot.pt`, ONNX re-export PARITY OK (1.45e-4,
+    exported with torch 2.14 CPU), model version `aff04ad45059`; smoke +
+    `npm run build` green; browser test not run (hardcodes the macOS Chrome
+    path). Not yet deployed.
 
 **Still open:**
 - **Within-stroke taper in the animated download SVG** — the live canvas now
@@ -775,11 +811,12 @@ modest expected gain; do the free pen-head refit first.
   bundled until the EOT change (progress #12) grew `SymbolCount` 7→8; **no
   longer loads**, historical only. Local extras (gitignored): resumable full
   state in `checkpoint-pressure.pt`, log in `train-pressure.log`.
-- `best_model.eot.pt` — **the bundled model** (committed): the 2026-09-06
-  batchim2 retrain (progress #15), promoted after acceptance renders + the
-  hangul.ink ship (model version 5b9d48e2c367). Load with `NUM_LAYERS=3
-  EMBEDDING_SIZE=8`. Best val −4.7238 on the 2,443-line split; beats the
-  prior champion +0.073 nats on the leak-free saturation subset. Same
-  filename previously held the 08-10 EOT retrain and the 08-16 batchim
-  retrain (52bc530824be) — recover via git history. Run artifacts in
-  `runs/2026-09-06-batchim2/` (gitignored).
+- `best_model.eot.pt` — **the bundled model** (committed): the 2026-10-17
+  endings retrain (progress #18), model version aff04ad45059. Load with
+  `NUM_LAYERS=3 EMBEDDING_SIZE=8`. Best val −5.2379 on the 4,283/1,046
+  split; beats the 10-07 champion +0.107 nats leak-free (+0.147 on the
+  endings lines). Same filename previously held the 08-10 EOT retrain, the
+  08-16 batchim retrain (52bc530824be), the 09-06 batchim2 retrain
+  (5b9d48e2c367) and the 10-07 retrain (746ddd1a3806) — recover via git
+  history. Run artifacts in `runs/2026-10-17-handwriting-train-2026-10-17/`
+  (gitignored).
